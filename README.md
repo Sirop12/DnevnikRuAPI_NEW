@@ -19,7 +19,7 @@
    ```
 2. Сохраните модуль в файл `dnevnik_formatter.py` (код предоставлен отдельно).
 3. Получите токен API Дневник.ру (например, через личный кабинет).
-   - Пример токена: `0KdVYGdEyHyZumPLY2QCH9T0VtJAUDQK`.
+   - Пример токена: `03dmDFj3njJsad3fdsfs`.
 
 **Зависимости**:
 - Python 3.6+.
@@ -30,7 +30,7 @@
 1. Импортируйте класс и создайте объект, указав токен:
    ```python
    from dnevnik_formatter import DnevnikFormatter
-   formatter = DnevnikFormatter(token="0KdVYGdEyHyZumPLY2QCH9T0VtJAUDQK")
+   formatter = DnevnikFormatter(token="03dmDFj3njJsad3fdsfs")
    ```
 2. Используйте методы для получения данных (см. раздел "Методы").
 
