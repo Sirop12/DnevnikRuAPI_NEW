@@ -305,7 +305,7 @@ print(period)
 from datetime import datetime
 from dnevnik_formatter import DnevnikFormatter
 
-formatter = DnevnikFormatter(token="gu0CKxoJ1SM7OXEn2e4CYFXOOMdHvc5P", debug_mode=True)
+formatter = DnevnikFormatter(token="", debug_mode=True)
 
 # За одну дату
 schedule = formatter.get_formatted_schedule(datetime(2025, 5, 14))
@@ -837,7 +837,7 @@ for teacher in teachers:
 from datetime import datetime
 from dnevnik_formatter import DnevnikFormatter
 
-formatter = DnevnikFormatter(token="gu0CKxoJ1SM7OXEn2e4CYFXOOMdHvc5P", debug_mode=True)
+formatter = DnevnikFormatter(token="", debug_mode=True)
 start_date = datetime(2025, 5, 12)
 end_date = datetime(2025, 5, 16)
 
