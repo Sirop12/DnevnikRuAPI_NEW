@@ -1,6 +1,6 @@
 # Документация по модулю DnevnikFormatter
 [СВЯЗЬ](https://t.me/Sirop1)
-
+[ПОЛУЧИТЬ ТОКЕН](https://androsovpavel.pythonanywhere.com/)
 ## СКОРО
  - Автоматическая регистрация через госуслуги
  - Асинхронная работа
@@ -28,7 +28,7 @@
    pip install pydnevnikruapi
    ```
 2. Сохраните модуль в файл `dnevnik_formatter.py` (код предоставлен отдельно).
-3. Получите токен API Дневник.ру (Скоро).
+3. [Получите токен API Дневник.ру](https://github.com/kesha1225/DnevnikRuAPI)
    - Пример токена: `03dmDFj3njJsad3fdsfs`.
 
 **Зависимости**:
