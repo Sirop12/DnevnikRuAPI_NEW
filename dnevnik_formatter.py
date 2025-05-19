@@ -1425,7 +1425,7 @@ if __name__ == "__main__":
     Инициализирует formatter с токеном, включает отладочный режим и получает последние 5 оценок
     в качестве примера использования.
     """
-    token = "tVs3pibqnscHWRiozfOSTbnbi1yDhb8h"
+    token = ""
     formatter = DnevnikFormatter(token=token, debug_mode=True)
 
     import csv
