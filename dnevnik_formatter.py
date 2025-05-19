@@ -26,7 +26,7 @@ class DnevnikFormatter:
         **Входные параметры**:
         - token (str): Токен авторизации для доступа к API Дневник.ру.
                        Должен быть действительным строковым токеном, полученным от API.
-                       Пример: "42r2fdvf5g53gr45".
+                       Пример: "XNI7zDmpyIUfpHXWurdK8QDbAqmwLaqg".
         - debug_mode (bool, необязательный): Флаг для включения отладочного логирования.
                                             Если True, в консоль выводятся подробные сообщения
                                             о действиях и ошибках. По умолчанию True.
@@ -960,16 +960,19 @@ class DnevnikFormatter:
             })
         return result
 
-    def _get_quarter_period_id(self, study_year: int, quarter: int) -> Optional[Tuple[str, datetime, datetime]]:
+    def _get_quarter_period_id(self, quarter: int, study_year: Optional[int] = None) -> Optional[Tuple[str, datetime, datetime]]:
         """
-        Получает ID периода и даты для указанной четверти.
+        Получает ID периода и даты для указанной четверти, поддерживая семестры и четверти.
 
         **Назначение**:
-        Определяет идентификатор и временной диапазон семестра, соответствующего четверти.
+        Определяет идентификатор и временной диапазон для четверти, игнорируя год по умолчанию
+        или фильтруя по указанному учебному году.
 
         **Входные параметры**:
-        - study_year (int): Учебный год (например, 2025 для 2024-2025).
         - quarter (int): Номер четверти (1-4).
+        - study_year (int, необязательный): Учебный год (например, 2025 для 2024-2025).
+                                        Если None, выбирается период по текущей дате или ближайший.
+                                        По умолчанию None.
 
         **Выходные данные**:
         - Optional[Tuple[str, datetime, datetime]]: Кортеж из:
@@ -979,38 +982,59 @@ class DnevnikFormatter:
             Если период не найден, возвращается None.
 
         **Алгоритм работы**:
-        1. Запрашивает периоды через /edu-groups/{group_id}/reporting-periods.
-        2. Сопоставляет четверть с номером семестра (1,2 -> 0; 3,4 -> 1).
-        3. Ищет подходящий семестр по типу, номеру и году.
-        4. Парсит даты начала и конца периода.
-        5. Возвращает кортеж или None при ошибке.
-
-        **Исключения**:
-        - Exception: Ловится для обработки ошибок API.
-
-        **Примечания**:
-        - Поддерживает два формата дат (с и без микросекунд).
+        1. Проверяет валидность номера четверти.
+        2. Запрашивает периоды через /edu-groups/{group_id}/reporting-periods.
+        3. Для типа 'Quarter' сопоставляет quarter (1-4) с number (0-3).
+        4. Для типа 'Semester' сопоставляет quarter (1-2 → 0, 3-4 → 1).
+        5. Если study_year не указан, выбирает период, который:
+        - Включает текущую дату, или
+        - Ближайший по дате начала.
+        6. Если study_year указан, фильтрует по году периода.
+        7. Парсит даты и возвращает кортеж или None при ошибке.
         """
+        if quarter not in [1, 2, 3, 4]:
+            self._log(f"Некорректный номер четверти: {quarter}")
+            return None
+
         try:
             periods = self.api.get(f"edu-groups/{self.group_id}/reporting-periods")
             self._log(f"Сырой ответ reporting-periods:\n{json.dumps(periods, ensure_ascii=False, indent=2)}")
         except Exception as e:
             self._log(f"Ошибка при получении периодов: {str(e)}")
             return None
-        quarter_to_semester = {1: 0, 2: 0, 3: 1, 4: 1}
-        target_semester = quarter_to_semester.get(quarter)
-        if target_semester is None:
-            self._log(f"Некорректный номер четверти: {quarter}")
-            return None
+
+        # Сопоставление четверти с номером периода
+        quarter_to_number = {
+            'Quarter': quarter - 1,  # 1-4 → 0-3
+            'Semester': 0 if quarter in [1, 2] else 1  # 1,2 → 0; 3,4 → 1
+        }
+
+        current_date = datetime.now()
+        candidate_periods = []
+        min_date_diff = None
+        closest_period = None
+
         for period in periods:
             period_type = period.get('type', '')
             period_number = period.get('number', -1)
-            period_year = period.get('year', 0)
             start_date_str = period.get('start', '')
             finish_date_str = period.get('finish', '')
-            self._log(f"Проверяю период: type={period_type}, number={period_number}, start={start_date_str}, finish={finish_date_str}")
-            if period_type != 'Semester' or period_number != target_semester or period_year != study_year - 1:
+            period_year = period.get('year', 0)
+            period_name = period.get('name', 'Неизвестный период')
+
+            self._log(f"Проверяю период: type={period_type}, number={period_number}, name={period_name}, start={start_date_str}, finish={finish_date_str}, year={period_year}")
+
+            # Пропускаем неподходящие типы или номера
+            if period_type not in ['Quarter', 'Semester']:
+                self._log(f"Пропущен период: неподдерживаемый тип {period_type}")
                 continue
+
+            expected_number = quarter_to_number.get(period_type)
+            if period_number != expected_number:
+                self._log(f"Пропущен период: number={period_number} не соответствует ожидаемому {expected_number} для {period_type}")
+                continue
+
+            # Парсинг дат
             try:
                 start_date = datetime.strptime(start_date_str, '%Y-%m-%dT%H:%M:%S')
                 finish_date = datetime.strptime(finish_date_str, '%Y-%m-%dT%H:%M:%S')
@@ -1021,12 +1045,39 @@ class DnevnikFormatter:
                 except ValueError:
                     self._log(f"Некорректный формат дат: start={start_date_str}, finish={finish_date_str}")
                     continue
-            self._log(f"Найден семестр для четверти {quarter}: ID={period.get('id')}")
-            return str(period.get('id')), start_date, finish_date
+
+            # Определяем учебный год периода
+            effective_year = start_date.year if start_date.month >= 9 else finish_date.year
+
+            # Фильтрация по study_year, если указан
+            if study_year is not None and effective_year != study_year and effective_year != study_year - 1:
+                self._log(f"Пропущен период: год {effective_year} не соответствует запрошенному {study_year}")
+                continue
+
+            # Проверяем, подходит ли период
+            period_data = (str(period.get('id')), start_date, finish_date, period_name)
+
+            # Если текущая дата внутри периода, выбираем его
+            if start_date <= current_date <= finish_date:
+                self._log(f"Выбран период, включающий текущую дату: ID={period_data[0]}, name={period_name}")
+                return period_data[:3]
+
+            # Собираем кандидатов для выбора ближайшего периода
+            candidate_periods.append(period_data)
+            date_diff = abs((start_date - current_date).total_seconds())
+            if min_date_diff is None or date_diff < min_date_diff:
+                min_date_diff = date_diff
+                closest_period = period_data
+
+        # Если подходящий период не найден, возвращаем ближайший
+        if closest_period:
+            self._log(f"Выбран ближайший период: ID={closest_period[0]}, name={closest_period[3]}")
+            return closest_period[:3]
+
         self._log(f"Период для четверти {quarter} не найден")
         return None
 
-    def get_formatted_final_marks(self, study_year: int, quarter: int) -> List[Dict[str, any]]:
+    def get_formatted_final_marks(self, quarter: int, study_year: Optional[int] = None) -> List[Dict[str, any]]:
         """
         Получает итоговые оценки за четверть для предметов с уроками в периоде.
 
@@ -1034,8 +1085,10 @@ class DnevnikFormatter:
         Извлекает оценки по предметам за четверть, включая средний балл.
 
         **Входные параметры**:
-        - study_year (int): Учебный год.
         - quarter (int): Номер четверти (1-4).
+        - study_year (int, необязательный): Учебный год (например, 2025 для 2024-2025).
+                                        Если None, выбирается период по текущей дате или ближайший.
+                                        По умолчанию None.
 
         **Выходные данные**:
         - List[Dict[str, any]]: Список словарей, каждый из которых содержит:
@@ -1060,7 +1113,7 @@ class DnevnikFormatter:
         """
         if quarter not in [1, 2, 3, 4]:
             raise ValueError("Номер четверти должен быть от 1 до 4")
-        period_data = self._get_quarter_period_id(study_year, quarter)
+        period_data = self._get_quarter_period_id(quarter=quarter, study_year=study_year)
         if not period_data:
             return []
         period_id, start_date, finish_date = period_data
@@ -1118,7 +1171,7 @@ class DnevnikFormatter:
             })
         return sorted(formatted_marks, key=lambda x: x['название предмета'])
 
-    def get_class_ranking(self, study_year: int, quarter: int) -> List[Dict]:
+    def get_class_ranking(self, quarter: int, study_year: Optional[int] = None) -> List[Dict]:
         """
         Формирует рейтинг учеников класса по средней оценке за четверть.
 
@@ -1126,8 +1179,10 @@ class DnevnikFormatter:
         Создаёт упорядоченный список учеников на основе их среднего балла за четверть.
 
         **Входные параметры**:
-        - study_year (int): Учебный год.
         - quarter (int): Номер четверти (1-4).
+        - study_year (int, необязательный): Учебный год (например, 2025 для 2024-2025).
+                                        Если None, выбирается период по текущей дате или ближайший.
+                                        По умолчанию None.
 
         **Выходные данные**:
         - List[Dict]: Список словарей, каждый из которых содержит:
@@ -1153,7 +1208,7 @@ class DnevnikFormatter:
         """
         if quarter not in [1, 2, 3, 4]:
             raise ValueError("Номер четверти должен быть от 1 до 4")
-        period_data = self._get_quarter_period_id(study_year, quarter)
+        period_data = self._get_quarter_period_id(quarter=quarter, study_year=study_year)
         if not period_data:
             return []
         period_id, start_date, finish_date = period_data
@@ -1176,7 +1231,7 @@ class DnevnikFormatter:
         ranking.sort(key=lambda x: x['avg_grade'], reverse=True)
         return ranking
 
-    def get_subject_stats(self, study_year: int, quarter: int, subject_id: int) -> Dict[str, int]:
+    def get_subject_stats(self, quarter: int, subject_id: int, study_year: Optional[int] = None) -> Dict[str, int]:
         """
         Получает гистограмму оценок по предмету за четверть.
 
@@ -1184,9 +1239,11 @@ class DnevnikFormatter:
         Формирует распределение оценок по предмету для всей группы.
 
         **Входные параметры**:
-        - study_year (int): Учебный год.
         - quarter (int): Номер четверти (1-4).
         - subject_id (int): ID предмета.
+        - study_year (int, необязательный): Учебный год (например, 2025 для 2024-2025).
+                                Если None, выбирается период по текущей дате или ближайший.
+                                По умолчанию None.
 
         **Выходные данные**:
         - Dict[str, int]: Словарь, где ключи — значения оценок, а значения — их количество.
@@ -1207,7 +1264,7 @@ class DnevnikFormatter:
         """
         if quarter not in [1, 2, 3, 4]:
             raise ValueError("Номер четверти должен быть от 1 до 4")
-        period_data = self._get_quarter_period_id(study_year, quarter)
+        period_data = self._get_quarter_period_id(quarter=quarter, study_year=study_year)
         if not period_data:
             return {}
         period_id, start_date, finish_date = period_data
@@ -1225,7 +1282,7 @@ class DnevnikFormatter:
             self._log(f"Ошибка при получении статистики по предмету {subject_id}: {str(e)}")
             return {}
 
-    def get_subject_ranking(self, study_year: int, quarter: int, subject_id: int) -> List[Dict]:
+    def get_subject_ranking(self, quarter: int, subject_id: int, study_year: Optional[int] = None) -> List[Dict]:
         """
         Формирует рейтинг учеников по предмету за четверть.
 
@@ -1233,9 +1290,11 @@ class DnevnikFormatter:
         Создаёт упорядоченный список учеников на основе их среднего балла по предмету.
 
         **Входные параметры**:
-        - study_year (int): Учебный год.
         - quarter (int): Номер четверти (1-4).
         - subject_id (int): ID предмета.
+        - study_year (int, необязательный): Учебный год (например, 2025 для 2024-2025).
+                                Если None, выбирается период по текущей дате или ближайший.
+                                По умолчанию None.
 
         **Выходные данные**:
         - List[Dict]: Список словарей, каждый из которых содержит:
@@ -1261,7 +1320,7 @@ class DnevnikFormatter:
         """
         if quarter not in [1, 2, 3, 4]:
             raise ValueError("Номер четверти должен быть от 1 до 4")
-        period_data = self._get_quarter_period_id(study_year, quarter)
+        period_data = self._get_quarter_period_id(quarter=quarter, study_year=study_year)
         if not period_data:
             return []
         period_id, start_date, finish_date = period_data
@@ -1296,7 +1355,7 @@ class DnevnikFormatter:
         ranking.sort(key=lambda x: x['avg_grade'], reverse=True)
         return ranking
 
-    def get_class_stats(self, study_year: int, quarter: int) -> Dict:
+    def get_class_stats(self, quarter: int, study_year: Optional[int] = None) -> Dict:
         """
         Получает статистику класса за четверть.
 
@@ -1305,8 +1364,10 @@ class DnevnikFormatter:
         и распределение оценок.
 
         **Входные параметры**:
-        - study_year (int): Учебный год.
         - quarter (int): Номер четверти (1-4).
+        - study_year (int, необязательный): Учебный год (например, 2025 для 2024-2025).
+                                        Если None, выбирается период по текущей дате или ближайший.
+                                        По умолчанию None.
 
         **Выходные данные**:
         - Dict: Словарь, содержащий:
@@ -1330,7 +1391,7 @@ class DnevnikFormatter:
         """
         if quarter not in [1, 2, 3, 4]:
             raise ValueError("Номер четверти должен быть от 1 до 4")
-        period_data = self._get_quarter_period_id(study_year, quarter)
+        period_data = self._get_quarter_period_id(quarter=quarter, study_year=study_year)
         if not period_data:
             return {}
         period_id, start_date, finish_date = period_data
@@ -1364,7 +1425,13 @@ if __name__ == "__main__":
     Инициализирует formatter с токеном, включает отладочный режим и получает последние 5 оценок
     в качестве примера использования.
     """
-    token = "token"
+    token = "tVs3pibqnscHWRiozfOSTbnbi1yDhb8h"
     formatter = DnevnikFormatter(token=token, debug_mode=True)
-    schedule = formatter.get_last_marks()
-    print(schedule)
+
+    import csv
+
+    ranking = formatter.get_class_ranking(study_year=2025, quarter=3)
+    with open("ranking.csv", "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["name", "avg_grade", "marks_count"])
+        writer.writeheader()
+        writer.writerows(ranking)
