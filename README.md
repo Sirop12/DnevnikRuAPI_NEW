@@ -38,7 +38,7 @@
    ```
 3. Получите токен API:
    - Зарегистрируйтесь на платформе Дневник.ру.
-   - Обратитесь к документации API или поддержке для получения токена (например, `XNI7zDmpyIUfpHXWurdK8QDbAqmwLaqg`).
+   - Обратитесь к документации API или поддержке для получения токена (например, `FDSf234refd23fdf232`).
 4. Импортируйте класс и модули:
    ```python
    from DnevnikFormatter import DnevnikFormatter
@@ -55,7 +55,7 @@ formatter = DnevnikFormatter(token, debug_mode=True)
 
 #### Параметры
 - **token** (`str`): Токен авторизации API.
-  - **Пример**: `"XNI7zDmpyIUfpHXWurdK8QDbAqmwLaqg"`.
+  - **Пример**: `"4234fdfdsgf34rfefe"`.
   - **Ограничения**: Должен быть действительным, иначе вызывается `ValueError`.
 - **debug_mode** (`bool`, по умолчанию `True`): Включает отладочные сообщения.
   - **Описание**: Выводит логи запросов, ошибок и состояния кэшей.
@@ -67,7 +67,7 @@ from DnevnikFormatter import DnevnikFormatter
 from datetime import datetime
 
 # Инициализация
-token = "XNI7zDmpyIUfpHXWurdK8QDbAqmwLaqg"
+token = "token"
 formatter = DnevnikFormatter(token=token, debug_mode=True)
 
 # Проверка
@@ -1239,7 +1239,7 @@ from datetime import datetime, timedelta
 import json
 
 # Инициализация
-token = "XNI7zDmpyIUfpHXWurdK8QDbAqmwLaqg"
+token = "token"
 formatter = DnevnikFormatter(token=token, debug_mode=True)
 
 try:
