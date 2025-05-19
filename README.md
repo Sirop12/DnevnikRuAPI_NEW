@@ -8,970 +8,1282 @@
  - Расширенная статистика по классам по школе
  - тг бот??
 
-### Ключевые возможности
 
-- **Расписание**: Получение расписания за одну дату или период с информацией о предметах, домашних заданиях, учителях и оценках.
-- **Оценки**: Извлечение последних оценок, оценок за период или итоговых оценок за четверть.
-- **Статистика**: Формирование рейтингов учеников, гистограмм оценок и общей статистики класса.
-- **Учителя**: Получение данных об учителях группы.
-- **Оптимизация**: Кэширование данных для минимизации запросов.
-- **Логирование**: Подробные отладочные сообщения.
+## Общее описание
 
-### Зависимости
+`DnevnikFormatter` — это Python-класс для обработки данных, получаемых через API Дневник.ру, предназначенный для разработчиков, интегрирующих информацию об учебном процессе в свои приложения. Класс предоставляет структурированные данные о расписании, оценках, учителях и статистике класса, оптимизируя запросы через кэширование и упрощая работу с API.
 
-- **Python**: 3.6 или выше.
-- **pydnevnikruapi**: Библиотека для API Дневник.ру.
-- Встроенные модули: `datetime`, `typing`, `statistics`, `collections.defaultdict`.
+### Основные возможности
+- Получение расписания уроков за день или период с деталями (время, предмет, домашние задания, оценки).
+- Извлечение последних оценок с фильтрацией по предмету и распределением по классу.
+- Формирование оценок за период, сгруппированных по предметам.
+- Получение итоговых оценок за четверть с вычислением среднего балла.
+- Список учителей группы с информацией о предметах и контактах.
+- Формирование рейтингов учеников класса или по предмету.
+- Статистика по предметам и классу (распределение оценок, средний балл).
 
-**Установка**:
+### Требования
+- **Python**: Версия 3.7 или выше (рекомендуется 3.9+).
+- **Библиотеки**:
+  - `pydnevnikruapi` — для работы с API Дневник.ру.
+  - Встроенные модули: `datetime`, `statistics`, `collections`, `json`, `typing`.
+- **Токен API**: Действующий токен авторизации от Дневник.ру.
+- **Доступ к интернету**: Для выполнения запросов к API.
 
-```bash
-pip install pydnevnikruapi
-```
+### Установка и настройка
+1. Установите Python (рекомендуется 3.9+).
+2. Установите библиотеку `pydnevnikruapi`:
+   ```bash
+   pip install pydnevnikruapi
+   ```
+3. Получите токен API:
+   - Зарегистрируйтесь на платформе Дневник.ру.
+   - Обратитесь к документации API или поддержке для получения токена (например, `XNI7zDmpyIUfpHXWurdK8QDbAqmwLaqg`).
+4. Импортируйте класс и модули:
+   ```python
+   from DnevnikFormatter import DnevnikFormatter
+   from datetime import datetime
+   ```
 
-Требуется токен API Дневник.ру, получаемый через авторизацию в системе.
+### Инициализация класса
+Класс инициализируется с токеном API и параметром отладки.
 
-## 2. Вспомогательные методы
-
-Эти методы используются внутри главных методов для обработки данных, форматирования или кэширования. Они не предназначены для прямого вызова, но их понимание важно для диагностики и расширения функциональности.
-
-### 2.1. `_log`
-
-**Назначение**: Логирует отладочные сообщения, если включен `debug_mode`. Используется для отслеживания работы всех методов.
-
-**Параметры**:
-- `message: str` — Сообщение для логирования.
-
-**Возвращает**: `None`
-
-**Исключения**: Нет.
-
-**Случаи ошибок**: Не применимо.
-
-**Примеры**:
-
+#### Синтаксис
 ```python
-formatter._log("Тестовое сообщение")
-# Вывод (если debug_mode=True): Тестовое сообщение
+formatter = DnevnikFormatter(token, debug_mode=True)
 ```
 
-**Рекомендации**:
-- Включайте `debug_mode=True` при тестировании для просмотра логов.
-- Отключите `debug_mode` в продакшене для уменьшения вывода.
+#### Параметры
+- **token** (`str`): Токен авторизации API.
+  - **Пример**: `"XNI7zDmpyIUfpHXWurdK8QDbAqmwLaqg"`.
+  - **Ограничения**: Должен быть действительным, иначе вызывается `ValueError`.
+- **debug_mode** (`bool`, по умолчанию `True`): Включает отладочные сообщения.
+  - **Описание**: Выводит логи запросов, ошибок и состояния кэшей.
+  - **Пример**: `False` для продакшена.
 
-### 2.2. `_load_subjects`
-
-**Назначение**: Загружает список предметов группы и кэширует их в `_subject_cache`. Используется для преобразования ID предметов в названия.
-
-**Параметры**: Нет.
-
-**Возвращает**: `None`
-
-**Исключения**: Нет (ошибки логируются).
-
-**Случаи ошибок**:
-- Ошибка API.
-- Отсутствие предметов в ответе API.
-
-**Примеры**:
-
+#### Пример инициализации
 ```python
-formatter._load_subjects()
-# Лог: Загружено предметов: 19
-```
-
-**Логи**:
-```
-Загружено предметов: 19
-```
-
-**Рекомендации**:
-- Проверьте `_subject_cache`:
-  ```python
-  print(formatter._subject_cache)
-  # Вывод: {630691695693757: 'Алг. и нач. анализа', ...}
-  ```
-- Если кэш пуст, проверьте `group_id` и доступность API.
-
-### 2.3. `_load_students`
-
-**Назначение**: Загружает список учеников группы и кэширует их в `_student_cache`. Используется для рейтингов и статистики.
-
-**Параметры**: Нет.
-
-**Возвращает**: `None`
-
-**Исключения**: Нет (ошибки логируются).
-
-**Случаи ошибок**:
-- Ошибка API.
-- Отсутствие учеников.
-
-**Примеры**:
-
-```python
-formatter._load_students()
-# Лог: Загружено учеников: 35
-```
-
-**Логи**:
-```
-Загружено учеников: 35
-```
-
-**Рекомендации**:
-- Проверьте `_student_cache` для диагностики.
-- Убедитесь, что `group_id` соответствует группе.
-
-### 2.4. `_load_teachers`
-
-**Назначение**: Загружает список учителей школы и кэширует их в `_teacher_cache`. Используется для отображения имен учителей.
-
-**Параметры**: Нет.
-
-**Возвращает**: `None`
-
-**Исключения**: Нет (ошибки логируются).
-
-**Случаи ошибок**:
-- Ошибка API.
-- Отсутствие учителей.
-
-**Примеры**:
-
-```python
-formatter._load_teachers()
-# Лог: Загружено учителей: 127
-```
-
-**Логи**:
-```
-Загружено учителей: 127
-```
-
-**Рекомендации**:
-- Если `_teacher_cache` пуст, проверьте `school_id`.
-
-### 2.5. `_format_lesson_time`
-
-**Назначение**: Преобразует номер урока (1–7) в строку времени (например, `"08:30-09:15"`). Используется в `_get_formatted_schedule_day`.
-
-**Параметры**:
-- `lesson_number: int` — Номер урока.
-
-**Возвращает**:
-- `str`: Время урока или `"Неизвестное время"`.
-
-**Исключения**: Нет.
-
-**Случаи ошибок**:
-- Номер урока вне диапазона 1–7.
-
-**Примеры**:
-
-```python
-print(formatter._format_lesson_time(1))
-# Вывод: 08:30-09:15
-
-print(formatter._format_lesson_time(8))
-# Вывод: Неизвестное время
-```
-
-**Рекомендации**:
-- Адаптируйте словарь `lesson_times` для другого расписания:
-  ```python
-  lesson_times = {1: "09:00-09:45", ...}
-  ```
-
-### 2.6. `_get_lesson_info`
-
-**Назначение**: Получает данные об уроке по ID, используя кэш или API. Используется в `_get_formatted_schedule_day` и `get_formatted_marks`.
-
-**Параметры**:
-- `lesson_id: str` — ID урока.
-- `force_refresh: bool` — Принудительное обновление кэша (по умолчанию `False`).
-
-**Возвращает**:
-- `Dict`: Данные урока (`subject`, `date`, `works`).
-- Пустой словарь при ошибке.
-
-**Исключения**: Нет (ошибки логируются).
-
-**Случаи ошибок**:
-- Ошибка API.
-- Некорректный `lesson_id`.
-
-**Примеры**:
-
-```python
-lesson = formatter._get_lesson_info("2336122272470595677")
-print(lesson.get('subject', {}).get('name'))
-# Вывод: Алг. и нач. анализа
-```
-
-```python
-lesson = formatter._get_lesson_info("invalid_id")
-print(lesson)
-# Вывод: {}
-```
-
-**Логи**:
-```
-Загружена информация об уроке 2336122272470595677: Тема урока (предмет: Алг. и нач. анализа)
-Ошибка при получении урока invalid_id: ...
-```
-
-**Рекомендации**:
-- Используйте `force_refresh=True` только при необходимости.
-- Проверяйте наличие ключа `subject`.
-
-### 2.7. `_get_quarter_period_id`
-
-**Назначение**: Получает ID и даты учебного периода для четверти. Используется в `get_formatted_final_marks`, `get_class_ranking`, `get_subject_stats`, `get_class_stats`, `get_subject_ranking`.
-
-**Параметры**:
-- `study_year: int` — Учебный год.
-- `quarter: int` — Номер четверти (1–4).
-
-**Возвращает**:
-- `Tuple[int, datetime, datetime]`: ID периода, начальная и конечная даты.
-- `None` при ошибке.
-
-**Исключения**: Нет (ошибки логируются).
-
-**Случаи ошибок**:
-- Ошибка API.
-- Отсутствие периода.
-
-**Примеры**:
-
-```python
-period = formatter._get_quarter_period_id(2024, 4)
-if period:
-    period_id, start_date, end_date = period
-    print(f"Период: {start_date} - {end_date}")
-# Вывод: Период: 2025-02-01 00:00:00 - 2025-05-31 00:00:00
-```
-
-```python
-period = formatter._get_quarter_period_id(2024, 5)
-print(period)
-# Вывод: None
-```
-
-**Логи**:
-```
-Не найдены периоды для четверти 5 в учебном году 2024
-```
-
-**Рекомендации**:
-- Убедитесь, что `quarter` в диапазоне 1–4.
-- Проверьте учебный год.
-
-## 3. Главные методы
-
-Эти методы выполняют ключевые задачи, такие как получение расписания, оценок и статистики. Они используют вспомогательные методы для обработки данных.
-
-### 3.1. `get_formatted_schedule`
-
-**Назначение**: Получает расписание уроков за одну дату или период с деталями о предметах, домашних заданиях, учителях и оценках. Использует `_get_formatted_schedule_day`, `_format_lesson_time`, `_get_lesson_info`, `_load_subjects`, `_load_teachers`.
-
-**Параметры**:
-- `start_date: datetime` — Начальная дата.
-- `end_date: Optional[datetime]` — Конечная дата (если `None`, за одну дату).
-
-**Возвращает**:
-- `List[Dict[str, str]]`: Список уроков за `start_date` (если `end_date=None`).
-- `Dict[str, List[Dict[str, str]]]`: Словарь с ключами — датами (`YYYY-MM-DD`), значениями — списками уроков:
-  - `time: str` — Время.
-  - `subject: str` — Предмет.
-  - `homework: str` — Домашнее задание.
-  - `title: str` — Тема.
-  - `teacher: str` — Учитель.
-  - `marks: str` — Оценки.
-- Пустой список/словарь при ошибке.
-
-**Исключения**:
-- `ValueError`: Если `end_date` раньше `start_date`.
-
-**Случаи ошибок**:
-- Ошибка API.
-- Отсутствие уроков.
-- Некорректные данные.
-
-**Примеры**:
-
-```python
-from datetime import datetime
-from dnevnik_formatter import DnevnikFormatter
-
-formatter = DnevnikFormatter(token="", debug_mode=True)
-
-# За одну дату
-schedule = formatter.get_formatted_schedule(datetime(2025, 5, 14))
-for lesson in schedule:
-    print(f"{lesson['time']} | {lesson['subject']} | {lesson['marks']}")
-```
-
-**Вывод**:
-```
-08:30-09:15 | Алг. и нач. анализа | Нет оценок
-09:20-10:05 | Физика | 4
-```
-
-```python
-# За период
-schedule = formatter.get_formatted_schedule(datetime(2025, 5, 14), datetime(2025, 5, 15))
-for date, lessons in schedule.items():
-    print(f"Дата: {date}")
-    for lesson in lessons:
-        print(f"  {lesson['time']} | {lesson['subject']} | {lesson['homework']}")
-```
-
-**Вывод**:
-```
-Дата: 2025-05-14
-  08:30-09:15 | Алг. и нач. анализа | Выполнить задания
-  09:20-10:05 | Физика | Подготовить доклад
-Дата: 2025-05-15
-  08:30-09:15 | История | Прочитать параграф
-```
-
-**Логи**:
-```
-Ответ get_group_lessons_info для 2025-05-14: 10 уроков
-Оценки за 2025-05-07 - 2025-05-14: 5 оценок
-```
-
-**Рекомендации**:
-- Ограничивайте период (например, неделя) для быстрого ответа.
-- Проверяйте тип результата (`list` или `dict`).
-- Очищайте `_schedule_cache` при необходимости:
-  ```python
-  formatter._schedule_cache.clear()
-  ```
-
-### 3.2. `get_formatted_marks`
-
-**Назначение**: Получает оценки за период, сгруппированные по предметам, с датой, значением и комментарием. Использует `_get_lesson_info`, `_load_subjects`.
-
-**Параметры**:
-- `start_date: datetime` — Начальная дата.
-- `end_date: Optional[datetime]` — Конечная дата (по умолчанию `start_date`).
-
-**Возвращает**:
-- `Dict[str, List[Dict[str, str]]]`: Словарь:
-  - Ключи — названия предметов.
-  - Значения — списки оценок (`date`, `value`, `comment`).
-- Пустой словарь при ошибке.
-
-**Исключения**: Нет (ошибки логируются).
-
-**Случаи ошибок**:
-- Ошибка API.
-- Отсутствие оценок.
-- Некорректные данные урока.
-
-**Примеры**:
-
-```python
+from DnevnikFormatter import DnevnikFormatter
 from datetime import datetime
 
-# За одну дату
-marks = formatter.get_formatted_marks(datetime(2025, 5, 14))
-for subject, mark_list in marks.items():
-    print(f"{subject}:")
-    for mark in mark_list:
-        print(f"  {mark['date']} - {mark['value']} ({mark['comment']})")
+# Инициализация
+token = "XNI7zDmpyIUfpHXWurdK8QDbAqmwLaqg"
+formatter = DnevnikFormatter(token=token, debug_mode=True)
+
+# Проверка
+print(f"ID пользователя: {formatter.person_id}")
 ```
 
-**Вывод**:
-```
-Алг. и нач. анализа:
-  14.05.2025 - 3 ()
-Физика:
-  14.05.2025 - 4 (Хорошо)
-```
+#### Нюансы
+- **Кэширование**: При инициализации загружаются кэши (`_subject_cache`, `_student_cache`, `_teacher_cache`, `_work_types_cache`).
+- **Ошибки**:
+  - `ValueError`: Недействительный токен.
+  - Сетевые ошибки API логируются и перебрасываются.
+- **Отладка**: `debug_mode=True` полезен для диагностики.
 
+---
+
+## Основные методы класса
+
+Ниже описаны девять основных методов с обработанным выводом и примерами использования.
+
+### 1. `get_formatted_schedule`
+
+#### Назначение
+Получает расписание уроков за одну дату или период с деталями: время, предмет, домашнее задание, учитель, оценки, место проведения.
+
+#### Синтаксис
 ```python
-# За период
-marks = formatter.get_formatted_marks(datetime(2025, 5, 12), datetime(2025, 5, 14))
-for subject, mark_list in marks.items():
-    print(f"{subject}:")
-    for mark in mark_list:
-        print(f"  {mark['date']} - {mark['value']}")
+result = formatter.get_formatted_schedule(start_date, end_date=None)
 ```
 
-**Вывод**:
-```
-Алг. и нач. анализа:
-  12.05.2025 - 4
-  14.05.2025 - 3
-Физика:
-  13.05.2025 - 4
-  14.05.2025 - 4
-```
+#### Входные параметры
+- **start_date** (`datetime`): Начальная дата.
+  - **Описание**: Дата начала расписания.
+  - **Ограничения**: Валидная `datetime`.
+  - **Пример**: `datetime(2025, 5, 19)`.
+- **end_date** (`Optional[datetime]`, по умолчанию `None`): Конечная дата.
+  - **Описание**: Если указана, возвращается расписание за период. Если `None`, за `start_date`.
+  - **Ограничения**: Не раньше `start_date`.
+  - **Пример**: `datetime(2025, 5, 20)`.
 
-**Логи**:
-```
-Получено 5 оценок за 2025-05-07 - 2025-05-14 для person_id=...
-Lesson IDs в оценках: ['2336122272470595677']
-```
+#### Выходные данные
+- **Тип**:
+  - `List[Dict[str, any]]` (для одной даты).
+  - `Dict[str, List[Dict[str, any]]]` (для периода).
+- **Структура урока**:
+  - `time` (`str`): Время урока.
+  - `subject` (`str`): Название предмета.
+  - `homework` (`str`): Домашнее задание.
+  - `files` (`list`): Файлы задания (имя и URL).
+  - `title` (`str`): Тема урока.
+  - `teacher` (`str`): Имя учителя.
+  - `mark_details` (`list`): Оценки (`value`, `work_type`, `mood`, `lesson_title`).
+  - `classroom` (`str`): Место проведения.
+  - `lesson_id` (`str`): ID урока.
+  - `works` (`list`): IDs работ.
+  - `lesson_number` (`int`): Номер урока.
+  - `lesson_status` (`str`): Статус урока.
+  - `attendance` (`str`): Посещаемость.
+  - `is_important` (`bool`): Важность задания.
+  - `sent_date` (`str`): Дата отправки задания.
 
-**Рекомендации**:
-- Проверяйте совпадение дат урока и оценки в логах.
-- Если предметы неизвестны, проверьте `_subject_cache`.
-
-### 3.3. `get_last_marks`
-
-**Назначение**: Получает последние оценки за 90 дней с фильтрацией по предмету и распределением оценок в классе. Использует `_get_lesson_info`, `_load_subjects`, `_load_students`.
-
-**Параметры**:
-- `count: int` — Количество оценок (по умолчанию 5).
-- `subject_id: Optional[int]` — ID предмета (если `None`, все предметы).
-
-**Возвращает**:
-- `List[Dict[str, any]]`: Список оценок:
-  - `subject: str` — Предмет.
-  - `title: str` — Тип работы.
-  - `mark: str` — Оценка.
-  - `class_distribution: Dict[str, int]` — Распределение оценок.
-  - `date: str` — Дата (`DD.MM.YYYY`).
-- Пустой список при ошибке.
-
-**Исключения**: Нет (ошибки логируются).
-
-**Случаи ошибок**:
-- Ошибка API.
-- Отсутствие оценок.
-- Некорректный `subject_id`.
-
-**Примеры**:
-
+#### Обработанный вывод (для одной даты)
 ```python
-# Все предметы
-marks = formatter.get_last_marks(count=3)
-for mark in marks:
-    print(f"{mark['subject']}: {mark['mark']} ({mark['date']})")
+[
+  {
+    "time": "08:30-09:15",
+    "subject": "Математика",
+    "homework": "Решить задачи 1-5 на стр. 45",
+    "files": ["tasks.pdf (http://example.com/tasks.pdf)"],
+    "title": "Решение уравнений",
+    "teacher": "Иванов И.И.",
+    "mark_details": [
+      {
+        "value": "5",
+        "work_type": "Домашняя работа",
+        "mood": "Отлично",
+        "lesson_title": "Решение уравнений"
+      }
+    ],
+    "classroom": "Корпус А Каб. 301, этаж 3",
+    "lesson_id": "1001",
+    "works": [5001],
+    "lesson_number": 1,
+    "lesson_status": "Проведён",
+    "attendance": "Присутствовал",
+    "is_important": True,
+    "sent_date": "2025-05-18T14:00:00"
+  }
+]
 ```
 
-**Вывод**:
-```
-Алг. и нач. анализа: 3 (14.05.2025)
-Физика: 4 (13.05.2025)
-История: 5 (12.05.2025)
-```
-
+#### Обработанный вывод (для периода)
 ```python
-# По предмету
-subject_id = 630691695693757  # Алг. и нач. анализа
-marks = formatter.get_last_marks(count=2, subject_id=subject_id)
-for mark in marks:
-    print(f"{mark['subject']}: {mark['mark']} ({mark['class_distribution']})")
-```
-
-**Вывод**:
-```
-Алг. и нач. анализа: 3 ( {'3': 5, '4': 10, '5': 2} )
-Алг. и нач. анализа: 4 ( {'3': 3, '4': 12, '5': 2} )
-```
-
-**Логи**:
-```
-Получено 15 оценок за период 2025-02-16 - 2025-05-17 для person_id=...
-Оценка: lesson_id=2336122272470595677, value=3, mark_date=2025-05-14
-```
-
-**Рекомендации**:
-- Используйте `subject_id` из `_subject_cache`.
-- Ограничивайте `count` для быстрого ответа.
-
-### 3.4. `get_formatted_final_marks`
-
-**Назначение**: Получает итоговые оценки за четверть с средней оценкой. Использует `_get_quarter_period_id`, `_load_subjects`.
-
-**Параметры**:
-- `study_year: int` — Учебный год.
-- `quarter: int` — Номер четверти (1–4).
-
-**Возвращает**:
-- `List[Dict[str, str]]`: Список:
-  - `название предмета: str` — Предмет.
-  - `оценки: List[str]` — Оценки.
-  - `итог: str` — Средняя оценка.
-- Пустой список при ошибке.
-
-**Исключения**:
-- `ValueError`: Если `quarter` не в диапазоне 1–4.
-
-**Случаи ошибок**:
-- Ошибка API.
-- Отсутствие оценок.
-
-**Примеры**:
-
-```python
-marks = formatter.get_formatted_final_marks(2024, 4)
-for mark in marks:
-    print(f"{mark['название предмета']}: {mark['итог']} ({mark['оценки']})")
-```
-
-**Вывод**:
-```
-Алг. и нач. анализа: 3.5 (['3', '4'])
-Физика: 4.0 (['4', '4'])
-```
-
-```python
-try:
-    marks = formatter.get_formatted_final_marks(2024, 5)
-except ValueError as e:
-    print(f"Ошибка: {e}")
-```
-
-**Вывод**:
-```
-Ошибка: Номер четверти должен быть от 1 до 4
-```
-
-**Логи**:
-```
-Получено 10 оценок за 2025-02-01 - 2025-05-31 для person_id=...
-```
-
-**Рекомендации**:
-- Проверяйте, являются ли оценки числовыми.
-- Используйте для отчетов по четверти.
-
-### 3.5. `get_class_ranking`
-
-**Назначение**: Формирует рейтинг учеников класса по средней оценке за четверть. Использует `_get_quarter_period_id`, `_load_students`, `_load_subjects`.
-
-**Параметры**:
-- `study_year: int` — Учебный год.
-- `quarter: int` — Номер четверти (1–4).
-
-**Возвращает**:
-- `List[Dict]`: Список:
-  - `name: str` — Имя ученика.
-  - `avg_grade: float` — Средняя оценка.
-  - `marks_count: int` — Количество оценок.
-- Пустой список при ошибке.
-
-**Исключения**:
-- `ValueError`: Если `quarter` не в диапазоне 1–4.
-
-**Случаи ошибок**:
-- Ошибка API.
-- Отсутствие оценок.
-
-**Примеры**:
-
-```python
-ranking = formatter.get_class_ranking(2024, 4)
-for student in ranking[:3]:
-    print(f"{student['name']}: {student['avg_grade']} ({student['marks_count']} оценок)")
-```
-
-**Вывод**:
-```
-Иванов И.: 4.5 (20 оценок)
-Петров П.: 4.2 (18 оценок)
-Сидоров С.: 4.0 (15 оценок)
-```
-
-```python
-try:
-    ranking = formatter.get_class_ranking(2024, 5)
-except ValueError as e:
-    print(f"Ошибка: {e}")
-```
-
-**Вывод**:
-```
-Ошибка: Номер четверти должен быть от 1 до 4
-```
-
-**Логи**:
-```
-Ошибка при получении оценок для ученика 12345, предмет 630691695693757: ...
-```
-
-**Рекомендации**:
-- Проверьте `_student_cache` перед вызовом.
-- Используйте для анализа успеваемости класса.
-
-### 3.6. `get_subject_stats`
-
-**Назначение**: Получает гистограмму оценок по предмету за четверть. Использует `_get_quarter_period_id`, `_load_subjects`.
-
-**Параметры**:
-- `study_year: int` — Учебный год.
-- `quarter: int` — Номер четверти (1–4).
-- `subject_id: int` — ID предмета.
-
-**Возвращает**:
-- `Dict[str, int]`: Оценки и их количество.
-- Пустой словарь при ошибке.
-
-**Исключения**:
-- `ValueError`: Если `quarter` не в диапазоне 1–4.
-
-**Случаи ошибок**:
-- Ошибка API.
-- Отсутствие оценок.
-
-**Примеры**:
-
-```python
-stats = formatter.get_subject_stats(2024, 4, 630691695693757)
-print(stats)
-```
-
-**Вывод**:
-```
-{'3': 10, '4': 15, '5': 5}
-```
-
-```python
-stats = formatter.get_subject_stats(2024, 4, 999999)  # Некорректный ID
-print(stats)
-```
-
-**Вывод**:
-```
-{}
-```
-
-**Логи**:
-```
-Ошибка при получении статистики по предмету 999999: ...
-```
-
-**Рекомендации**:
-- Используйте `subject_id` из `_subject_cache`.
-- Проверяйте логи при пустом результате.
-
-### 3.7. `get_subject_ranking`
-
-**Назначение**: Формирует рейтинг учеников по предмету за четверть. Использует `_get_quarter_period_id`, `_load_students`, `_load_subjects`.
-
-**Параметры**:
-- `study_year: int` — Учебный год.
-- `quarter: int` — Номер четверти (1–4).
-- `subject_id: int` — ID предмета.
-
-**Возвращает**:
-- `List[Dict]`: Список:
-  - `name: str` — Имя ученика.
-  - `avg_grade: float` — Средняя оценка.
-  - `marks_count: int` — Количество оценок.
-- Пустой список при ошибке.
-
-**Исключения**:
-- `ValueError`: Если `quarter` не в диапазоне 1–4.
-
-**Случаи ошибок**:
-- Ошибка API.
-- Отсутствие оценок.
-
-**Примеры**:
-
-```python
-ranking = formatter.get_subject_ranking(2024, 4, 630691695693757)
-for student in ranking[:3]:
-    print(f"{student['name']}: {student['avg_grade']}")
-```
-
-**Вывод**:
-```
-Иванов И.: 4.7
-Петров П.: 4.3
-Сидоров С.: 4.0
-```
-
-```python
-ranking = formatter.get_subject_ranking(2024, 4, 999999)
-print(ranking)
-```
-
-**Вывод**:
-```
-[]
-```
-
-**Логи**:
-```
-Ошибка при получении оценок для ученика 12345, предмет 999999: ...
-```
-
-**Рекомендации**:
-- Используйте для анализа успеваемости по предмету.
-
-### 3.8. `get_class_stats`
-
-**Назначение**: Получает статистику класса за четверть (количество оценок, средняя оценка, распределение). Использует `_get_quarter_period_id`, `_load_subjects`.
-
-**Параметры**:
-- `study_year: int` — Учебный год.
-- `quarter: int` — Номер четверти (1–4).
-
-**Возвращает**:
-- `Dict`: Статистика:
-  - `total_marks: int` — Количество оценок.
-  - `average_class_grade: float` — Средняя оценка.
-  - `grade_distribution: Dict[str, float]` — Процентное распределение.
-- Пустой словарь при ошибке.
-
-**Исключения**:
-- `ValueError`: Если `quarter` не в диапазоне 1–4.
-
-**Случаи ошибок**:
-- Ошибка API.
-- Отсутствие оценок.
-
-**Примеры**:
-
-```python
-stats = formatter.get_class_stats(2024, 4)
-print(stats)
-```
-
-**Вывод**:
-```
 {
-    'total_marks': 500,
-    'average_class_grade': 3.8,
-    'grade_distribution': {'3': 40.0, '4': 50.0, '5': 10.0}
+  "2025-05-19": [
+    {
+      "time": "08:30-09:15",
+      "subject": "Математика",
+      "homework": "Решить задачи 1-5 на стр. 45",
+      "files": ["tasks.pdf (http://example.com/tasks.pdf)"],
+      "title": "Решение уравнений",
+      "teacher": "Иванов И.И.",
+      "mark_details": [
+        {
+          "value": "5",
+          "work_type": "Домашняя работа",
+          "mood": "Отлично",
+          "lesson_title": "Решение уравнений"
+        }
+      ],
+      "classroom": "Корпус А Каб. 301, этаж 3",
+      "lesson_id": "1001",
+      "works": [5001],
+      "lesson_number": 1,
+      "lesson_status": "Проведён",
+      "attendance": "Присутствовал",
+      "is_important": True,
+      "sent_date": "2025-05-18T14:00:00"
+    }
+  ],
+  "2025-05-20": []
 }
 ```
 
+#### Примеры использования
+1. **Вывод расписания на сегодня**:
+   ```python
+   from datetime import datetime
+
+   today = datetime.now()
+   schedule = formatter.get_formatted_schedule(today)
+   print("Расписание на сегодня:")
+   for lesson in schedule:
+       print(f"{lesson['time']} - {lesson['subject']}: {lesson['homework']}")
+   ```
+
+2. **Фильтрация важных заданий**:
+   ```python
+   from datetime import datetime, timedelta
+
+   start_date = datetime.now()
+   end_date = start_date + timedelta(days=7)
+   schedule = formatter.get_formatted_schedule(start_date, end_date)
+   print("Важные задания:")
+   for date, lessons in schedule.items():
+       for lesson in lessons:
+           if lesson["is_important"]:
+               print(f"{date} - {lesson['subject']}: {lesson['homework']}")
+   ```
+
+3. **Экспорт в JSON**:
+   ```python
+   import json
+   from datetime import datetime
+
+   schedule = formatter.get_formatted_schedule(datetime(2025, 5, 19))
+   with open("schedule.json", "w", encoding="utf-8") as f:
+       json.dump(schedule, f, ensure_ascii=False, indent=2)
+   ```
+
+#### Нюансы
+- **Кэширование**: Использует `_schedule_cache`. Очистите через `clear_schedule_cache()`.
+- **Ошибки**:
+  - `ValueError`: Если `end_date` раньше `start_date`.
+  - Сетевые ошибки возвращают пустую структуру.
+- **Ограничения**:
+  - Зависит от `_subject_cache`, `_teacher_cache`.
+  - Пустое расписание возвращает пустую структуру.
+- **Рекомендации**:
+  - Включайте `debug_mode=True` для диагностики.
+  - Учитывайте лимиты API для больших периодов.
+
+---
+
+### 2. `get_last_marks`
+
+#### Назначение
+Возвращает последние оценки ученика с фильтрацией по предмету, включая предмет, тип работы, тему урока и распределение оценок в классе.
+
+#### Синтаксис
 ```python
-try:
-    stats = formatter.get_class_stats(2024, 5)
-except ValueError as e:
-    print(f"Ошибка: {e}")
+result = formatter.get_last_marks(count=5, subject_id=None)
 ```
 
-**Вывод**:
-```
-Ошибка: Номер четверти должен быть от 1 до 4
-```
+#### Входные параметры
+- **count** (`int`, по умолчанию `5`): Количество оценок.
+  - **Описание**: Ограничивает число записей.
+  - **Ограничения**: Положительное целое.
+  - **Пример**: `3`.
+- **subject_id** (`Optional[int]`, по умолчанию `None`): ID предмета.
+  - **Описание**: Фильтр по предмету. Если `None`, все предметы.
+  - **Ограничения**: Должен быть в `_subject_cache`.
+  - **Пример**: `101` ("Математика").
 
-**Логи**:
-```
-Ошибка при получении статистики по предмету 630691695693757: ...
-```
+#### Выходные данные
+- **Тип**: `List[Dict[str, any]]`
+- **Структура элемента**:
+  - `subject` (`str`): Название предмета.
+  - `work_type` (`str`): Тип работы.
+  - `lesson_title` (`str`): Тема урока.
+  - `mark` (`str`): Оценка.
+  - `class_distribution` (`dict`): Распределение оценок `{оценка: количество}`.
+  - `date` (`str`): Дата оценки (`DD.MM.YYYY`).
 
-**Рекомендации**:
-- Используйте для общей оценки успеваемости.
-
-### 3.9. `get_group_teachers`
-
-**Назначение**: Получает список учителей группы за период на основе расписания. Использует `_load_teachers`.
-
-**Параметры**:
-- `start_date: Optional[datetime]` — Начальная дата (по умолчанию текущая минус 7 дней).
-- `end_date: Optional[datetime]` — Конечная дата (по умолчанию текущая плюс 30 дней).
-
-**Возвращает**:
-- `List[Dict[str, str]]`: Список учителей:
-  - `id: str` — ID.
-  - `fullName: str` — Полное имя.
-  - `shortName: str` — Краткое имя.
-  - `subjects: str` — Предметы.
-  - `email: str` — Email.
-  - `position: str` — Должность.
-- Пустой список при ошибке.
-
-**Исключения**:
-- `ValueError`: Если `end_date` раньше `start_date`.
-
-**Случаи ошибок**:
-- Ошибка API.
-- Отсутствие уроков.
-
-**Примеры**:
-
+#### Обработанный вывод
 ```python
-teachers = formatter.get_group_teachers()
-for teacher in teachers:
-    print(f"{teacher['shortName']} ({teacher['subjects']})")
+[
+  {
+    "subject": "Математика",
+    "work_type": "Домашняя работа",
+    "lesson_title": "Решение уравнений",
+    "mark": "5",
+    "class_distribution": {"5": 10, "4": 8, "3": 2},
+    "date": "18.05.2025"
+  },
+  {
+    "subject": "Русский язык",
+    "work_type": "Контрольная работа",
+    "lesson_title": "Синтаксис",
+    "mark": "4",
+    "class_distribution": {"5": 5, "4": 10, "3": 5},
+    "date": "17.05.2025"
+  }
+]
 ```
 
-**Вывод**:
-```
-Татьяна К. (Алг. и нач. анализа)
-Иван П. (Физика)
-```
+#### Примеры использования
+1. **Вывод последних оценок**:
+   ```python
+   marks = formatter.get_last_marks(count=3)
+   print("Последние оценки:")
+   for mark in marks:
+       print(f"{mark['date']} - {mark['subject']}: {mark['mark']} ({mark['work_type']})")
+   ```
 
+2. **Фильтрация по предмету**:
+   ```python
+   math_marks = formatter.get_last_marks(count=5, subject_id=101)
+   print("Оценки по математике:")
+   for mark in math_marks:
+       print(f"{mark['date']} - {mark['mark']} ({mark['lesson_title']})")
+   ```
+
+3. **Визуализация распределения**:
+   ```python
+   import matplotlib.pyplot as plt
+
+   marks = formatter.get_last_marks(count=1)
+   if marks:
+       dist = marks[0]["class_distribution"]
+       plt.bar(dist.keys(), dist.values())
+       plt.title(f"Распределение оценок по {marks[0]['subject']}")
+       plt.xlabel("Оценка")
+       plt.ylabel("Количество")
+       plt.savefig("mark_distribution.png")
+   ```
+
+#### Нюансы
+- **Период**: Оценки за последние 90 дней.
+- **Фильтрация**: Некорректный `subject_id` отключает фильтр.
+- **Ошибки**:
+  - Сетевые ошибки возвращают пустой список.
+  - Ошибки гистограммы дают пустое `class_distribution`.
+- **Ограничения**:
+  - Зависит от `_lesson_cache`, `_work_types_cache`.
+- **Рекомендации**:
+  - Проверяйте `_subject_cache` для `subject_id`.
+  - Используйте для мониторинга успеваемости.
+
+---
+
+### 3. `get_formatted_marks`
+
+#### Назначение
+Возвращает оценки за период, сгруппированные по предметам, с деталями: дата урока, дата оценки, тип работы, настроение, тема урока.
+
+#### Синтаксис
 ```python
-from datetime import datetime
-teachers = formatter.get_group_teachers(datetime(2025, 5, 1), datetime(2025, 5, 7))
-for teacher in teachers:
-    print(f"{teacher['shortName']} - {teacher['email']}")
+result = formatter.get_formatted_marks(start_date, end_date=None)
 ```
 
-**Вывод**:
-```
-Татьяна К. - t.k@example.com
-Иван П. - i.p@example.com
-```
+#### Входные параметры
+- **start_date** (`datetime`): Начальная дата.
+  - **Описание**: Начало периода.
+  - **Ограничения**: Валидная `datetime`.
+  - **Пример**: `datetime(2025, 5, 1)`.
+- **end_date** (`Optional[datetime]`, по умолчанию `None`): Конечная дата.
+  - **Описание**: Если `None`, используется `start_date`.
+  - **Ограничения**: Не раньше `start_date`.
+  - **Пример**: `datetime(2025, 5, 31)`.
 
-**Логи**:
-```
-Добавлен учитель 754039: Татьяна К.
-```
+#### Выходные данные
+- **Тип**: `Dict[str, List[Dict[str, str]]]`
+- **Структура**:
+  - Ключи: названия предметов.
+  - Значения: списки оценок:
+    - `lesson_date` (`str`): Дата урока (`DD.MM.YYYY`).
+    - `mark_date` (`str`): Дата оценки (`DD.MM.YYYY`).
+    - `value` (`str`): Оценка.
+    - `work_type` (`str`): Тип работы.
+    - `mood` (`str`): Настроение.
+    - `lesson_title` (`str`): Тема урока.
 
-**Рекомендации**:
-- Увеличьте период, если список пуст.
-- Используйте `_teacher_cache` для быстрого доступа.
-
-## 4. Применение
-
-### 4.1. Мониторинг расписания и оценок
-
-**Задача**: Получить расписание за неделю и оценки за этот же период.
-
+#### Обработанный вывод
 ```python
-from datetime import datetime
-from dnevnik_formatter import DnevnikFormatter
-
-formatter = DnevnikFormatter(token="", debug_mode=True)
-start_date = datetime(2025, 5, 12)
-end_date = datetime(2025, 5, 16)
-
-# Расписание
-schedule = formatter.get_formatted_schedule(start_date, end_date)
-for date, lessons in schedule.items():
-    print(f"\nДата: {date}")
-    if not lessons:
-        print("  Нет уроков")
-    else:
-        for lesson in lessons:
-            print(f"  {lesson['time']} | {lesson['subject']} | {lesson['marks']}")
-
-# Оценки
-marks = formatter.get_formatted_marks(start_date, end_date)
-for subject, mark_list in marks.items():
-    print(f"\n{subject}:")
-    for mark in mark_list:
-        print(f"  {mark['date']} - {mark['value']}")
+{
+  "Математика": [
+    {
+      "lesson_date": "19.05.2025",
+      "mark_date": "19.05.2025",
+      "value": "5",
+      "work_type": "Домашняя работа",
+      "mood": "Отлично",
+      "lesson_title": "Решение уравнений"
+    }
+  ],
+  "Русский язык": []
+}
 ```
 
-**Вывод**:
-```
-Дата: 2025-05-12
-  08:30-09:15 | Алг. и нач. анализа | 4
-  09:20-10:05 | Физика | Нет оценок
-...
-Дата: 2025-05-16
-  Нет уроков
+#### Примеры использования
+1. **Вывод оценок за день**:
+   ```python
+   from datetime import datetime
 
-Алг. и нач. анализа:
-  12.05.2025 - 4
-  14.05.2025 - 3
-Физика:
-  13.05.2025 - 4
-```
+   start_date = datetime(2025, 5, 19)
+   marks = formatter.get_formatted_marks(start_date)
+   print("Оценки за день:")
+   for subject, grades in marks.items():
+       for grade in grades:
+           print(f"{subject}: {grade['value']} ({grade['work_type']})")
+   ```
 
-### 4.2. Анализ успеваемости
+2. **Средний балл за период**:
+   ```python
+   from datetime import datetime
+   from statistics import mean
 
-**Задача**: Получить итоговые оценки за четверть и рейтинг класса.
+   start_date = datetime(2025, 5, 1)
+   end_date = datetime(2025, 5, 31)
+   marks = formatter.get_formatted_marks(start_date, end_date)
+   for subject, grades in marks.items():
+       numeric_grades = [int(g["value"]) for g in grades if g["value"].isdigit()]
+       avg = mean(numeric_grades) if numeric_grades else "Нет оценок"
+       print(f"{subject}: Средний балл = {avg}")
+   ```
 
+3. **Экспорт в CSV**:
+   ```python
+   import csv
+   from datetime import datetime
+
+   start_date = datetime(2025, 5, 1)
+   marks = formatter.get_formatted_marks(start_date)
+   with open("marks.csv", "w", encoding="utf-8", newline="") as f:
+       writer = csv.DictWriter(f, fieldnames=["subject", "lesson_date", "mark_date", "value", "work_type", "lesson_title"])
+       writer.writeheader()
+       for subject, grades in marks.items():
+           for grade in grades:
+               writer.writerow({"subject": subject, **grade})
+   ```
+
+#### Нюансы
+- **Фильтрация**: Оценки по дате урока.
+- **Ошибки**:
+  - `ValueError`: Если `end_date` раньше `start_date`.
+  - Сетевые ошибки возвращают пустой словарь.
+- **Ограничения**:
+  - Зависит от `_subject_cache`, расписания.
+  - Пустое расписание — пустой результат.
+- **Рекомендации**:
+  - Используйте небольшие периоды.
+  - Проверяйте логи.
+
+---
+
+### 4. `get_formatted_final_marks`
+
+#### Назначение
+Получает итоговые оценки за четверть по предметам с уроками, включая список оценок и средний балл.
+
+#### Синтаксис
 ```python
-marks = formatter.get_formatted_final_marks(2024, 4)
-print("Итоговые оценки:")
-for mark in marks:
-    print(f"{mark['название предмета']}: {mark['итог']}")
-
-ranking = formatter.get_class_ranking(2024, 4)
-print("\nРейтинг класса:")
-for student in ranking[:3]:
-    print(f"{student['name']}: {student['avg_grade']}")
+result = formatter.get_formatted_final_marks(study_year, quarter)
 ```
 
-**Вывод**:
-```
-Итоговые оценки:
-Алг. и нач. анализа: 3.5
-Физика: 4.0
+#### Входные параметры
+- **study_year** (`int`): Учебный год.
+  - **Описание**: Год периода (например, 2025).
+  - **Ограничения**: Положительное целое.
+  - **Пример**: `2025`.
+- **quarter** (`int`): Номер четверти.
+  - **Описание**: Четверть (1-4).
+  - **Ограничения**: 1-4, иначе `ValueError`.
+  - **Пример**: `3`.
 
-Рейтинг класса:
-Иванов И.: 4.5
-Петров П.: 4.2
-Сидоров С.: 4.0
-```
+#### Выходные данные
+- **Тип**: `List[Dict[str, any]]`
+- **Структура элемента**:
+  - `название предмета` (`str`): Название предмета.
+  - `оценки` (`list`): Список оценок.
+  - `средний балл` (`str`): Средний балл (до 1 знака) или "Нет оценок"/"Нет данных".
 
-### 4.3. Статистика по предмету
-
-**Задача**: Получить гистограмму оценок и рейтинг по предмету.
-
+#### Обработанный вывод
 ```python
-subject_id = 630691695693757  # Алг. и нач. анализа
-stats = formatter.get_subject_stats(2024, 4, subject_id)
-print("Гистограмма оценок:", stats)
-
-ranking = formatter.get_subject_ranking(2024, 4, subject_id)
-print("\nРейтинг по предмету:")
-for student in ranking[:3]:
-    print(f"{student['name']}: {student['avg_grade']}")
+[
+  {
+    "название предмета": "Математика",
+    "оценки": ["5", "4", "5"],
+    "средний балл": "4.7"
+  },
+  {
+    "название предмета": "Русский язык",
+    "оценки": [],
+    "средний балл": "Нет оценок"
+  }
+]
 ```
 
-**Вывод**:
-```
-Гистограмма оценок: {'3': 10, '4': 15, '5': 5}
+#### Примеры использования
+1. **Вывод итоговых оценок**:
+   ```python
+   marks = formatter.get_formatted_final_marks(study_year=2025, quarter=3)
+   print("Итоговые оценки:")
+   for subject in marks:
+       print(f"{subject['название предмета']}: {subject['средний балл']}")
+   ```
 
-Рейтинг по предмету:
-Иванов И.: 4.7
-Петров П.: 4.3
-Сидоров С.: 4.0
-```
+2. **Фильтрация предметов с оценками**:
+   ```python
+   marks = formatter.get_formatted_final_marks(study_year=2025, quarter=3)
+   print("Предметы с оценками:")
+   for subject in marks:
+       if subject["оценки"]:
+           print(f"{subject['название предмета']}: {subject['оценки']}")
+   ```
 
-## 5. Обработка ошибок
+3. **График средних баллов**:
+   ```python
+   import matplotlib.pyplot as plt
 
-### Стратегии
+   marks = formatter.get_formatted_final_marks(study_year=2025, quarter=3)
+   subjects = [s["название предмета"] for s in marks]
+   averages = [float(s["средний балл"]) if s["средний балл"].replace(".", "").isdigit() else 0 for s in marks]
+   plt.bar(subjects, averages)
+   plt.title("Средние баллы за четверть")
+   plt.xlabel("Предмет")
+   plt.ylabel("Средний балл")
+   plt.savefig("final_marks.png")
+   ```
 
-- **Логирование**: Проверяйте логи с `"Ошибка при"` для диагностики.
-- **Пустые результаты**: Методы возвращают пустые списки/словари при ошибках.
-- **Исключения**: Проверяйте `ValueError` для некорректных параметров.
+#### Нюансы
+- **Фильтрация**: Только предметы с уроками.
+- **Ошибки**:
+  - `ValueError`: Если `quarter` не 1-4.
+  - Сетевые ошибки возвращают пустой список.
+- **Ограничения**:
+  - Зависит от `_get_quarter_period_id`.
+  - Средний балл для числовых оценок.
+- **Рекомендации**:
+  - Проверяйте логи.
+  - Используйте для итогового анализа.
 
-### Примеры
+---
 
+### 5. `get_group_teachers`
+
+#### Назначение
+Возвращает список учителей группы за период с информацией о предметах, контактах и должности.
+
+#### Синтаксис
 ```python
-schedule = formatter.get_formatted_schedule(datetime(2025, 5, 14))
-if not schedule:
-    print("Ошибка или нет уроков")
-else:
-    for lesson in schedule:
-        print(lesson['subject'])
+result = formatter.get_group_teachers(start_date=None, end_date=None)
 ```
 
+#### Входные параметры
+- **start_date** (`Optional[datetime]`, по умолчанию `None`): Начальная дата.
+  - **Описание**: Если `None`, текущая дата минус 7 дней.
+  - **Ограничения**: Валидная `datetime`, если указана.
+  - **Пример**: `datetime(2025, 5, 1)`.
+- **end_date** (`Optional[datetime]`, по умолчанию `None`): Конечная дата.
+  - **Описание**: Если `None`, текущая дата плюс 30 дней.
+  - **Ограничения**: Не раньше `start_date`.
+  - **Пример**: `datetime(2025, 5, 31)`.
+
+#### Выходные данные
+- **Тип**: `List[Dict[str, str]]`
+- **Структура элемента**:
+  - `id` (`str`): ID учителя.
+  - `fullName` (`str`): Полное имя.
+  - `shortName` (`str`): Краткое имя.
+  - `subjects` (`str`): Предметы.
+  - `email` (`str`): Email.
+  - `position` (`str`): Должность.
+
+#### Обработанный вывод
 ```python
-try:
-    formatter.get_formatted_final_marks(2024, 5)
-except ValueError as e:
-    print(f"Ошибка: {e}")
+[
+  {
+    "id": "201",
+    "fullName": "Иванов Иван Иванович",
+    "shortName": "Иванов И.И.",
+    "subjects": "Математика",
+    "email": "ivanov@example.com",
+    "position": "Учитель"
+  },
+  {
+    "id": "202",
+    "fullName": "Петрова Анна Алексеевна",
+    "shortName": "Петрова А.А.",
+    "subjects": "Русский язык",
+    "email": "",
+    "position": "Учитель"
+  }
+]
 ```
 
-## 6. Ограничения и рекомендации
+#### Примеры использования
+1. **Вывод учителей**:
+   ```python
+   from datetime import datetime
+
+   teachers = formatter.get_group_teachers()
+   print("Учителя группы:")
+   for teacher in teachers:
+       print(f"{teacher['fullName']} ({teacher['subjects']})")
+   ```
+
+2. **Фильтрация по предмету**:
+   ```python
+   from datetime import datetime
+
+   start_date = datetime(2025, 5, 1)
+   end_date = datetime(2025, 5, 31)
+   teachers = formatter.get_group_teachers(start_date, end_date)
+   math_teachers = [t for t in teachers if "Математика" in t["subjects"]]
+   print("Учителя математики:")
+   for teacher in math_teachers:
+       print(f"{teacher['shortName']}: {teacher['email']}")
+   ```
+
+3. **Экспорт контактов**:
+   ```python
+   import json
+   from datetime import datetime
+
+   teachers = formatter.get_group_teachers(datetime(2025, 5, 1), datetime(2025, 5, 31))
+   with open("teachers.json", "w", encoding="utf-8") as f:
+       json.dump(teachers, f, ensure_ascii=False, indent=2)
+   ```
+
+#### Нюансы
+- **Кэширование**: Использует `_teacher_cache`.
+- **Ошибки**:
+  - `ValueError`: Если `end_date` раньше `start_date`.
+  - Сетевые ошибки возвращают пустой список.
+- **Ограничения**:
+  - Только учителя, привязанные к урокам.
+  - Требуется `_teacher_cache`.
+- **Рекомендации**:
+  - Проверяйте логи.
+  - Используйте для анализа преподавателей.
+
+---
+
+### 6. `get_class_ranking`
+
+#### Назначение
+Формирует рейтинг учеников класса по средней оценке за четверть.
+
+#### Синтаксис
+```python
+result = formatter.get_class_ranking(study_year, quarter)
+```
+
+#### Входные параметры
+- **study_year** (`int`): Учебный год.
+  - **Описание**: Год периода.
+  - **Ограничения**: Положительное целое.
+  - **Пример**: `2025`.
+- **quarter** (`int`): Номер четверти.
+  - **Описание**: Четверть (1-4).
+  - **Ограничения**: 1-4.
+  - **Пример**: `3`.
+
+#### Выходные данные
+- **Тип**: `List[Dict]`
+- **Структура элемента**:
+  - `name` (`str`): Имя ученика.
+  - `avg_grade` (`float`): Средний балл (до 2 знаков).
+  - `marks_count` (`int`): Количество оценок.
+
+#### Обработанный вывод
+```python
+[
+  {
+    "name": "Иванов Иван",
+    "avg_grade": 4.5,
+    "marks_count": 2
+  },
+  {
+    "name": "Петров Пётр",
+    "avg_grade": 4.0,
+    "marks_count": 3
+  }
+]
+```
+
+#### Примеры использования
+1. **Вывод рейтинга**:
+   ```python
+   ranking = formatter.get_class_ranking(study_year=2025, quarter=3)
+   print("Рейтинг класса:")
+   for student in ranking:
+       print(f"{student['name']}: {student['avg_grade']} (оценок: {student['marks_count']})")
+   ```
+
+2. **Топ-3 ученика**:
+   ```python
+   ranking = formatter.get_class_ranking(study_year=2025, quarter=3)
+   top_3 = sorted(ranking, key=lambda x: x["avg_grade"], reverse=True)[:3]
+   print("Топ-3 ученика:")
+   for student in top_3:
+       print(f"{student['name']}: {student['avg_grade']}")
+   ```
+
+3. **Экспорт рейтинга**:
+   ```python
+   import csv
+
+   ranking = formatter.get_class_ranking(study_year=2025, quarter=3)
+   with open("ranking.csv", "w", encoding="utf-8", newline="") as f:
+       writer = csv.DictWriter(f, fieldnames=["name", "avg_grade", "marks_count"])
+       writer.writeheader()
+       writer.writerows(ranking)
+   ```
+
+#### Нюансы
+- **Фильтрация**: Только числовые оценки.
+- **Ошибки**:
+  - `ValueError`: Если `quarter` не 1-4.
+  - Сетевые ошибки пропускаются.
+- **Ограничения**:
+  - Зависит от `_student_cache`, `_get_quarter_period_id`.
+  - Нет оценок — `avg_grade` равен 0.
+- **Рекомендации**:
+  - Проверяйте `_student_cache`.
+  - Используйте для анализа успеваемости.
+
+---
+
+### 7. `get_subject_stats`
+
+#### Назначение
+Возвращает гистограмму оценок по предмету за четверть для группы.
+
+#### Синтаксис
+```python
+result = formatter.get_subject_stats(study_year, quarter, subject_id)
+```
+
+#### Входные параметры
+- **study_year** (`int`): Учебный год.
+  - **Описание**: Год периода.
+  - **Ограничения**: Положительное целое.
+  - **Пример**: `2025`.
+- **quarter** (`int`): Номер четверти.
+  - **Описание**: Четверть (1-4).
+  - **Ограничения**: 1-4.
+  - **Пример**: `3`.
+- **subject_id** (`int`): ID предмета.
+  - **Описание**: Идентификатор предмета.
+  - **Ограничения**: В `_subject_cache`.
+  - **Пример**: `101`.
+
+#### Выходные данные
+- **Тип**: `Dict[str, int]`
+- **Структура**: Ключи — оценки, значения — количество.
+
+#### Обработанный вывод
+```python
+{
+  "5": 10,
+  "4": 8
+}
+```
+
+#### Примеры использования
+1. **Вывод статистики**:
+   ```python
+   stats = formatter.get_subject_stats(study_year=2025, quarter=3, subject_id=101)
+   print("Статистика по математике:")
+   for grade, count in stats.items():
+       print(f"Оценка {grade}: {count} раз")
+   ```
+
+2. **Визуализация гистограммы**:
+   ```python
+   import matplotlib.pyplot as plt
+
+   stats = formatter.get_subject_stats(study_year=2025, quarter=3, subject_id=101)
+   plt.bar(stats.keys(), stats.values())
+   plt.title("Распределение оценок по математике")
+   plt.xlabel("Оценка")
+   plt.ylabel("Количество")
+   plt.savefig("subject_stats.png")
+   ```
+
+3. **Сравнение предметов**:
+   ```python
+   subjects = {101: "Математика", 102: "Русский язык"}
+   for subject_id, name in subjects.items():
+       stats = formatter.get_subject_stats(study_year=2025, quarter=3, subject_id=subject_id)
+       total = sum(stats.values())
+       print(f"{name}: Всего оценок = {total}")
+   ```
+
+#### Нюансы
+- **Ошибки**:
+  - `ValueError`: Если `quarter` не 1-4.
+  - Сетевые ошибки возвращают пустой словарь.
+- **Ограничения**:
+  - Зависит от `_get_quarter_period_id`.
+  - Требуется валидный `subject_id`.
+- **Рекомендации**:
+  - Проверяйте `_subject_cache`.
+  - Используйте для анализа оценок.
+
+---
+
+### 8. `get_subject_ranking`
+
+#### Назначение
+Формирует рейтинг учеников по среднему баллу за четверть по предмету.
+
+#### Синтаксис
+```python
+result = formatter.get_subject_ranking(study_year, quarter, subject_id)
+```
+
+#### Входные параметры
+- **study_year** (`int`): Учебный год.
+  - **Описание**: Год периода.
+  - **Ограничения**: Положительное целое.
+  - **Пример**: `2025`.
+- **quarter** (`int`): Номер четверти.
+  - **Описание**: Четверть (1-4).
+  - **Ограничения**: 1-4.
+  - **Пример**: `3`.
+- **subject_id** (`int`): ID предмета.
+  - **Описание**: Идентификатор предмета.
+  - **Ограничения**: В `_subject_cache`.
+  - **Пример**: `101`.
+
+#### Выходные данные
+- **Тип**: `List[Dict]`
+- **Структура элемента**:
+  - `name` (`str`): Имя ученика.
+  - `avg_grade` (`float`): Средний балл (до 2 знаков).
+  - `marks_count` (`int`): Количество оценок.
+
+#### Обработанный вывод
+```python
+[
+  {
+    "name": "Иванов Иван",
+    "avg_grade": 4.5,
+    "marks_count": 2
+  },
+  {
+    "name": "Петров Пётр",
+    "avg_grade": 4.0,
+    "marks_count": 1
+  }
+]
+```
+
+#### Примеры использования
+1. **Вывод рейтинга**:
+   ```python
+   ranking = formatter.get_subject_ranking(study_year=2025, quarter=3, subject_id=101)
+   print("Рейтинг по математике:")
+   for student in ranking:
+       print(f"{student['name']}: {student['avg_grade']}")
+   ```
+
+2. **Топ-5 учеников**:
+   ```python
+   ranking = formatter.get_subject_ranking(study_year=2025, quarter=3, subject_id=101)
+   top_5 = sorted(ranking, key=lambda x: x["avg_grade"], reverse=True)[:5]
+   print("Топ-5 по математике:")
+   for student in top_5:
+       print(f"{student['name']}: {student['avg_grade']}")
+   ```
+
+3. **Экспорт рейтинга**:
+   ```python
+   import json
+
+   ranking = formatter.get_subject_ranking(study_year=2025, quarter=3, subject_id=101)
+   with open("subject_ranking.json", "w", encoding="utf-8") as f:
+       json.dump(ranking, f, ensure_ascii=False, indent=2)
+   ```
+
+#### Нюансы
+- **Кэш**: Если `_student_cache` пуст, загружает данные.
+- **Ошибки**:
+  - `ValueError`: Если `quarter` не 1-4.
+  - Сетевые ошибки пропускаются.
+- **Ограничения**:
+  - Требуется валидный `subject_id`.
+  - Нет оценок — `avg_grade` равен 0.
+- **Рекомендации**:
+  - Проверяйте `_subject_cache`, `_student_cache`.
+  - Используйте для анализа успеваемости.
+
+---
+
+### 9. `get_class_stats`
+
+#### Назначение
+Возвращает статистику класса за четверть: количество оценок, средний балл, процентное распределение.
+
+#### Синтаксис
+```python
+result = formatter.get_class_stats(study_year, quarter)
+```
+
+#### Входные параметры
+- **study_year** (`int`): Учебный год.
+  - **Описание**: Год периода.
+  - **Ограничения**: Положительное целое.
+  - **Пример**: `2025`.
+- **quarter** (`int`): Номер четверти.
+  - **Описание**: Четверть (1-4).
+  - **Ограничения**: 1-4.
+  - **Пример**: `3`.
+
+#### Выходные данные
+- **Тип**: `Dict`
+- **Структура**:
+  - `total_marks` (`int`): Количество оценок.
+  - `average_class_grade` (`float`): Средний балл (до 2 знаков).
+  - `grade_distribution` (`dict`): Процентное распределение `{оценка: процент}`.
+
+#### Обработанный вывод
+```python
+{
+  "total_marks": 100,
+  "average_class_grade": 4.3,
+  "grade_distribution": {
+    "5": 50.0,
+    "4": 30.0,
+    "3": 20.0
+  }
+}
+```
+
+#### Примеры использования
+1. **Вывод статистики**:
+   ```python
+   stats = formatter.get_class_stats(study_year=2025, quarter=3)
+   print("Статистика класса:")
+   print(f"Средний балл: {stats['average_class_grade']}")
+   print(f"Оценки: {stats['grade_distribution']}")
+   ```
+
+2. **Визуализация распределения**:
+   ```python
+   import matplotlib.pyplot as plt
+
+   stats = formatter.get_class_stats(study_year=2025, quarter=3)
+   grades = stats["grade_distribution"]
+   plt.pie(grades.values(), labels=grades.keys(), autopct="%1.1f%%")
+   plt.title("Распределение оценок класса")
+   plt.savefig("class_stats_pie.png")
+   ```
+
+3. **Сравнение четвертей**:
+   ```python
+   for quarter in range(1, 4):
+       stats = formatter.get_class_stats(study_year=2025, quarter=quarter)
+       print(f"Четверть {quarter}: Средний балл = {stats['average_class_grade']}")
+   ```
+
+#### Нюансы
+- **Фильтрация**: Только числовые оценки.
+- **Ошибки**:
+  - `ValueError`: Если `quarter` не 1-4.
+  - Сетевые ошибки пропускаются.
+- **Ограничения**:
+  - Зависит от `_get_quarter_period_id`, `_subject_cache`.
+  - Нет оценок — нулевые значения.
+- **Рекомендации**:
+  - Используйте для анализа успеваемости.
+  - Проверяйте логи.
+
+---
+
+## Внутренние методы класса
+
+Ниже описаны внутренние методы, начинающиеся с `_`, которые используются основными методами для выполнения запросов к API, обработки данных и управления кэшем. Эти методы не предназначены для прямого вызова разработчиком, но их понимание полезно для отладки и расширения функциональности.
+
+### 1. `_get_schedule`
+
+#### Назначение
+Запрашивает данные расписания за указанный период через API Дневник.ру и сохраняет их в `_schedule_cache`.
+
+#### Синтаксис
+```python
+result = formatter._get_schedule(start_date, end_date)
+```
+
+#### Входные параметры
+- **start_date** (`datetime`): Начальная дата.
+  - **Описание**: Дата начала периода.
+  - **Ограничения**: Валидная `datetime`.
+  - **Пример**: `datetime(2025, 5, 19)`.
+- **end_date** (`datetime`): Конечная дата.
+  - **Описание**: Дата окончания периода.
+  - **Ограничения**: Не раньше `start_date`.
+  - **Пример**: `datetime(2025, 5, 20)`.
+
+#### Выходные данные
+- **Тип**: `Dict[str, Dict]`
+- **Описание**: Словарь, где ключи — даты в формате `YYYY-MM-DD`, а значения — словари с данными уроков, предметов, учителей, домашних заданий, оценок и посещаемости.
+
+#### Контекст использования
+- Вызывается методом `get_formatted_schedule` для получения данных перед их форматированием.
+- Использует API-запрос для загрузки расписания, если данные отсутствуют в `_schedule_cache`.
+- Логирует запросы и ошибки в `debug_mode`.
+
+#### Нюансы
+- **Кэширование**: Сохраняет данные в `_schedule_cache` для повторного использования.
+- **Ошибки**:
+  - Сетевые ошибки возвращают пустой словарь с логированием.
+  - Некорректные даты вызывают `ValueError`.
+- **Ограничения**: Зависит от структуры API и токена.
+- **Рекомендации**: Используйте `debug_mode=True` для проверки сырых данных.
+
+---
+
+### 2. `_get_marks`
+
+#### Назначение
+Запрашивает данные об оценках за указанный период через API и кэширует их.
+
+#### Синтаксис
+```python
+result = formatter._get_marks(start_date, end_date)
+```
+
+#### Входные параметры
+- **start_date** (`datetime`): Начальная дата.
+  - **Описание**: Дата начала периода.
+  - **Ограничения**: Валидная `datetime`.
+  - **Пример**: `datetime(2025, 5, 1)`.
+- **end_date** (`datetime`): Конечная дата.
+  - **Описание**: Дата окончания периода.
+  - **Ограничения**: Не раньше `start_date`.
+  - **Пример**: `datetime(2025, 5, 31)`.
+
+#### Выходные данные
+- **Тип**: `List[Dict]`
+- **Описание**: Список словарей, содержащих информацию об оценках: ID урока, работы, значение, дата, тип работы, настроение.
+
+#### Контекст использования
+- Используется методами `get_last_marks`, `get_formatted_marks` для получения данных об оценках.
+- Выполняет API-запрос, если данные отсутствуют в кэше.
+- Логирует запросы и ошибки.
+
+#### Нюансы
+- **Кэширование**: Сохраняет данные в `_marks_cache`.
+- **Ошибки**:
+  - Сетевые ошибки возвращают пустой список.
+  - Некорректные даты вызывают `ValueError`.
+- **Ограничения**: Зависит от `_lesson_cache` для связи оценок с уроками.
+- **Рекомендации**: Проверяйте логи для диагностики.
+
+---
+
+### 3. `_get_quarter_period_id`
+
+#### Назначение
+Определяет ID периода для указанной четверти и учебного года.
+
+#### Синтаксис
+```python
+result = formatter._get_quarter_period_id(study_year, quarter)
+```
+
+#### Входные параметры
+- **study_year** (`int`): Учебный год.
+  - **Описание**: Год периода.
+  - **Ограничения**: Положительное целое.
+  - **Пример**: `2025`.
+- **quarter** (`int`): Номер четверти.
+  - **Описание**: Четверть (1-4).
+  - **Ограничения**: 1-4.
+  - **Пример**: `3`.
+
+#### Выходные данные
+- **Тип**: `str`
+- **Описание**: ID периода четверти (например, "2024-2025-Q3").
+
+#### Контекст использования
+- Используется методами `get_formatted_final_marks`, `get_class_ranking`, `get_subject_stats`, `get_subject_ranking`, `get_class_stats` для определения периода.
+- Запрашивает данные о периодах через API, если кэш пуст.
+- Логирует ошибки.
+
+#### Нюансы
+- **Кэширование**: Сохраняет данные в `_period_cache`.
+- **Ошибки**:
+  - `ValueError`: Если `quarter` не 1-4.
+  - Сетевые ошибки возвращают `None`.
+- **Ограничения**: Зависит от API и структуры периодов.
+- **Рекомендации**: Проверяйте логи при пустом результате.
+
+---
+
+### 4. `_load_caches`
+
+#### Назначение
+Инициализирует кэши (`_subject_cache`, `_student_cache`, `_teacher_cache`, `_work_types_cache`) при создании объекта класса.
+
+#### Синтаксис
+```python
+formatter._load_caches()
+```
+
+#### Входные параметры
+- Нет параметров.
+
+#### Выходные данные
+- **Тип**: `None`
+- **Описание**: Заполняет внутренние кэши данными из API.
+
+#### Контекст использования
+- Вызывается автоматически при инициализации `DnevnikFormatter`.
+- Загружает данные о предметах, учениках, учителях и типах работ.
+- Логирует процесс загрузки.
+
+#### Нюансы
+- **Ошибки**:
+  - Сетевые ошибки логируются, но не прерывают инициализацию.
+  - Пустые кэши могут повлиять на методы.
+- **Ограничения**: Зависит от токена и API.
+- **Рекомендации**: Проверяйте логи для проверки загрузки.
+
+---
+
+### 5. `_parse_date`
+
+#### Назначение
+Парсит строку даты из API в объект `datetime`.
+
+#### Синтаксис
+```python
+result = formatter._parse_date(date_str)
+```
+
+#### Входные параметры
+- **date_str** (`str`): Строка даты.
+  - **Описание**: Дата в формате API (например, "2025-05-19T00:00:00" или "2025-05-19T00:00:00.000000").
+  - **Ограничения**: Должна быть валидной.
+  - **Пример**: `"2025-05-19T14:00:00"`.
+
+#### Выходные данные
+- **Тип**: `datetime`
+- **Описание**: Объект `datetime`, представляющий дату.
+
+#### Контекст использования
+- Используется всеми методами, работающими с датами, для обработки строк дат из API.
+- Поддерживает два формата: `%Y-%m-%dT%H:%M:%S` и `%Y-%m-%dT%H:%M:%S.%f`.
+
+#### Нюансы
+- **Ошибки**: Некорректные строки возвращают `None` с логированием.
+- **Ограничения**: Ограничено поддерживаемыми форматами.
+- **Рекомендации**: Проверяйте логи при проблемах с датами.
+
+---
+
+### 6. `_format_lesson`
+
+#### Назначение
+Форматирует данные урока в структурированный вид для метода `get_formatted_schedule`.
+
+#### Синтаксис
+```python
+result = formatter._format_lesson(lesson_data, date)
+```
+
+#### Входные параметры
+- **lesson_data** (`Dict`): Данные урока.
+  - **Описание**: Словарь с информацией об уроке (ID, предмет, учитель, время, домашнее задание, оценки).
+  - **Пример**: `{"id": 1001, "subject_id": 101, "hours": "08:30-09:15", ...}`.
+- **date** (`str`): Дата урока.
+  - **Описание**: Дата в формате `YYYY-MM-DD`.
+  - **Пример**: `"2025-05-19"`.
+
+#### Выходные данные
+- **Тип**: `Dict[str, any]`
+- **Описание**: Форматированный словарь урока, соответствующий структуре `get_formatted_schedule`.
+
+#### Контекст использования
+- Вызывается в `get_formatted_schedule` для преобразования сырых данных в конечный формат.
+- Использует `_subject_cache`, `_teacher_cache`, `_work_types_cache`.
+
+#### Нюансы
+- **Ошибки**: Отсутствие данных в кэшах пропускается с логированием.
+- **Ограничения**: Зависит от корректности входных данных.
+- **Рекомендации**: Проверяйте кэши перед вызовом.
+
+---
+
+### 7. `_get_histogram`
+
+#### Назначение
+Запрашивает гистограмму оценок для работы через API.
+
+#### Синтаксис
+```python
+result = formatter._get_histogram(work_id)
+```
+
+#### Входные параметры
+- **work_id** (`int`): ID работы.
+  - **Описание**: Идентификатор работы, для которой нужна гистограмма.
+  - **Ограничения**: Должен быть валидным.
+  - **Пример**: `5001`.
+
+#### Выходные данные
+- **Тип**: `Dict[str, int]`
+- **Описание**: Словарь, где ключи — оценки, значения — их количество.
+
+#### Контекст использования
+- Используется в `get_last_marks`, `get_subject_stats`, `get_class_stats` для получения распределения оценок.
+- Логирует запросы и ошибки.
+
+#### Нюансы
+- **Ошибки**: Сетевые ошибки возвращают пустой словарь.
+- **Ограничения**: Зависит от API.
+- **Рекомендации**: Проверяйте логи.
+
+---
+
+## Общие рекомендации
+
+### Обработка ошибок
+- **Сетевые ошибки**: Возвращаются пустые структуры, логируются в `debug_mode`.
+- **Параметры**:
+  - Проверяйте `quarter` (1-4), `subject_id` (`_subject_cache`), даты (`end_date` не раньше `start_date`).
+- **Логи**: Используйте `debug_mode=True` для диагностики.
+
+### Оптимизация
+- **Кэширование**: Используйте кэши для минимизации запросов. Очищайте через `clear_schedule_cache()`.
+- **Лимиты API**: Разбивайте большие периоды.
+- **Обновления**: Загружайте данные при смене года/группы.
 
 ### Ограничения
+- Зависимость от API Дневник.ру.
+- Устаревшие кэши дают некорректные результаты.
+- Названия предметов/работ на русском.
 
-- Зависимость от стабильности API Дневник.ру.
-- Кэши могут содержать устаревшие данные.
-- Производительность снижается для больших классов.
-- Фиксированное время уроков в `_format_lesson_time`.
+### Пример интеграции
+Создание отчета:
+```python
+from DnevnikFormatter import DnevnikFormatter
+from datetime import datetime, timedelta
+import json
 
-### Рекомендации
+# Инициализация
+token = "XNI7zDmpyIUfpHXWurdK8QDbAqmwLaqg"
+formatter = DnevnikFormatter(token=token, debug_mode=True)
 
-- Используйте `debug_mode=True` для тестирования.
-- Ограничивайте периоды дат.
-- Храните токен в переменной окружения.
-- Сверяйте результаты с интерфейсом Дневник.ру.
+try:
+    # Расписание на неделю
+    start_date = datetime.now()
+    end_date = start_date + timedelta(days=7)
+    schedule = formatter.get_formatted_schedule(start_date, end_date)
+    with open("weekly_schedule.json", "w", encoding="utf-8") as f:
+        json.dump(schedule, f, ensure_ascii=False, indent=2)
 
-## 7. Заключение
+    # Последние оценки
+    marks = formatter.get_last_marks(count=5)
+    print("Последние оценки:")
+    for mark in marks:
+        print(f"{mark['date']} - {mark['subject']}: {mark['mark']}")
 
-`DnevnikFormatter` упрощает работу с API Дневник.ру, предоставляя методы для получения расписания, оценок и статистики. Вспомогательные методы обеспечивают кэширование и форматирование, а главные методы решают ключевые задачи. Документация с примерами помогает интегрировать класс в проекты, такие как боты или аналитические системы.
+    # Статистика класса
+    stats = formatter.get_class_stats(study_year=2025, quarter=3)
+    print(f"Средний балл класса: {stats['average_class_grade']}")
+
+except ValueError as e:
+    print(f"Ошибка параметров: {e}")
+except Exception as e:
+    print(f"Ошибка API: {e}")
+```
+
+### Визуализация
+График оценок:
+```python
+import matplotlib.pyplot as plt
+from datetime import datetime
+
+marks = formatter.get_formatted_marks(datetime(2025, 5, 1), datetime(2025, 5, 31))
+subjects = list(marks.keys())
+counts = [len(grades) for grades in marks.values()]
+plt.bar(subjects, counts)
+plt.title("Количество оценок по предметам за май")
+plt.xlabel("Предмет")
+plt.ylabel("Оценок")
+plt.savefig("marks_per_subject.png")
+```
+
+## Заключение
+`DnevnikFormatter` упрощает работу с данными Дневник.ру, предоставляя структурированные результаты. Используйте примеры кода и внутренние методы для отладки и расширения. Для диагностики включайте `debug_mode=True`.
+
 
 Для доработок или вопросов обратитесь к разработчику.
