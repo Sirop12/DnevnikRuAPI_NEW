@@ -7,6 +7,7 @@
 ![GitHub](https://img.shields.io/github/license/Sirop12/DnevnikRuAPI_NEW)
 ![GitHub Repo stars](https://img.shields.io/github/stars/Sirop12/DnevnikRuAPI_NEW)
 ![GitHub issues](https://img.shields.io/github/issues/Sirop12/DnevnikRuAPI_NEW)
+
 [СВЯЗЬ](https://t.me/Sirop1)
 
 [ПОЛУЧИТЬ ТОКЕН](https://androsovpavel.pythonanywhere.com/)
