@@ -1,7 +1,7 @@
 # Полная документация к классу `DnevnikFormatterAsync`
-![Static Badge](https://img.shields.io/badge/Sirop12/DnevnikRuAPI_NEW)
+![Static Badge](https://img.shields.io/badge/DnevnikRuAPI_NEW-Sirop12)
 ![GitHub top language](https://img.shields.io/github/languages/top/Sirop12/DnevnikRuAPI_NEW)
-![GitHub](https://img.shields.io/github/license/OkulusDev/Sirop12/DnevnikRuAPI_NEW)
+![GitHub](https://img.shields.io/github/license/Sirop12/DnevnikRuAPI_NEW)
 ![GitHub Repo stars](https://img.shields.io/github/stars/Sirop12/DnevnikRuAPI_NEW)
 ![GitHub issues](https://img.shields.io/github/issues/Sirop12/DnevnikRuAPI_NEW)
 
