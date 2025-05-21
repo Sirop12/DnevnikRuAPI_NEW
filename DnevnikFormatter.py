@@ -5,6 +5,13 @@ from typing import Dict, List, Optional, Tuple
 import statistics
 from collections import defaultdict
 import json
+import re
+from openai import OpenAI
+import os
+
+API_KEY = "API_KEY"
+
+
 
 class DnevnikFormatter:
     """
@@ -87,7 +94,34 @@ class DnevnikFormatter:
         self._teacher_cache = {}  # Кэш учителей: {teacher_id: teacher_info}
         self._schedule_cache = {}  # Кэш расписания: {date_str: schedule_data}
         self._work_types_cache = {}  # Кэш типов работ: {work_type_id: work_type_name}
-
+        self.title_to_weight = {
+            'Административная контрольная работа': 10,
+            'Арифметический диктант': 4,
+            'Входная контрольная работа': 5,
+            'Входной контрольный диктант': 5,
+            'Государственная итоговая аттестация': 10,
+            'Диагностическая работа': 4,
+            'Диктант': 8,
+            'Зачет': 8,
+            'Интегральный зачет': 3,
+            'Итоговая контрольная работа': 9,
+            'Контрольная': 9,
+            'Контрольное списывание': 7,
+            'Контрольный диктант': 9,
+            'Лабораторная работа': 7,
+            'Математический диктант': 4,
+            #'Опрос': 2,???????????????
+            'Практическая работа': 8,
+            'Проверочная работа': 8,
+            'Работа с контурными картами': 5,
+            'Словарный диктант': 4,
+            'Стартовая контрольная работа': 3,
+            'Тематическая контрольная работа': 6,
+            'Тест': 5,
+            'Техника чтения': 5,
+            'Устный счет': 4,
+            'Экзамен': 10
+        }
         # Логирование успешной инициализации
         self._log(f"Инициализация завершена: person_id={self.person_id}, school_id={self.school_id}, group_id={self.group_id}")
 
@@ -97,6 +131,38 @@ class DnevnikFormatter:
         self._load_teachers()
         self._load_work_types()
 
+
+
+    def make_ai_request(self, prompt: str) -> str:
+        """
+        Выполняет запрос к API DeepSeek с указанным промптом.
+
+        **Входные параметры**:
+        - prompt (str): Текст промпта для отправки в API.
+
+        **Выходные данные**:
+        - str: Ответ от API или сообщение об ошибке.
+
+        **Исключения**:
+        - Exception: Обрабатывает ошибки API.
+        """
+        try:
+            client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=API_KEY,
+            )
+            completion = client.chat.completions.create(
+                model="deepseek/deepseek-chat",
+                messages=[{"role": "user", "content": prompt}],
+                extra_body={}
+            )
+            response = completion.choices[0].message.content
+            self._log(f"AI запрос выполнен: {len(response)} символов")
+            return response
+        except Exception as e:
+            self._log(f"Ошибка при запросе к API DeepSeek: {str(e)}")
+            return f"Ошибка при выполнении AI запроса: {str(e)}"
+    
     def clear_schedule_cache(self):
         """
         Очищает кэш расписания, заставляя последующие запросы загружать данные заново.
@@ -203,7 +269,34 @@ class DnevnikFormatter:
                 'CreativeWork': 'Творческая работа'
             }
             self._log(f"Использован запасной набор типов работ: {len(self._work_types_cache)}")
+    def _read_prompts(self) -> Dict[str, str]:
+        """
+        Читает промпты из prompts.json.
 
+        **Входные параметры**:
+        - None
+
+        **Выходные данные**:
+        - Dict[str, str]: Словарь с промптами, где ключи — типы анализа ('weeks', 'marks', 'ranking').
+
+        **Исключения**:
+        - FileNotFoundError: Если файл prompts.json не найден.
+        - Exception: Другие ошибки чтения или парсинга JSON.
+        """
+        try:
+            with open("prompts.json", 'r', encoding='utf-8') as f:
+                prompts_data = json.load(f)
+            prompts = {
+                key: data.get("prompt", "") for key, data in prompts_data.items()
+            }
+            self._log(f"Промпты успешно загружены из prompts.json: {list(prompts.keys())}")
+            return prompts
+        except FileNotFoundError:
+            self._log("Ошибка: Файл prompts.json не найден")
+            raise
+        except Exception as e:
+            self._log(f"Ошибка при чтении prompts.json: {str(e)}")
+            raise
     def _load_subjects(self):
         """
         Загружает список предметов группы из API и кэширует их.
@@ -490,6 +583,7 @@ class DnevnikFormatter:
         if date_str in self._schedule_cache:
             self._log(f"Использую кэшированное расписание для {date_str}")
             return self._schedule_cache[date_str]
+        
         try:
             schedule = self.api.get(
                 f"persons/{self.person_id}/groups/{self.group_id}/schedules",
@@ -498,55 +592,67 @@ class DnevnikFormatter:
                     "endDate": date.strftime("%Y-%m-%dT23:59:59")
                 }
             )
-            self._log(f"Сырой ответ расписания:\n{json.dumps(schedule, ensure_ascii=False, indent=2)}")
         except Exception as e:
             self._log(f"Ошибка при получении расписания: {str(e)}")
             self._schedule_cache[date_str] = []
             return []
+        
         if not schedule.get('days'):
             self._log(f"Нет данных расписания для {date_str}")
             self._schedule_cache[date_str] = []
             return []
+        
         formatted_schedule = []
         seen_lesson_ids = set()
         for day in schedule.get('days', []):
             if not day.get('date', '').startswith(date_str):
                 continue
+            
             subjects = {str(s['id']): s['name'] for s in day.get('subjects', [])}
             for subject_id, subject_name in subjects.items():
                 if subject_id not in self._subject_cache:
                     self._subject_cache[subject_id] = subject_name
                     self._log(f"Добавлен предмет в _subject_cache: {subject_id} -> {subject_name}")
+            
             teachers = {str(t['person']['id']): t['person']['shortName'] for t in day.get('teachers', [])}
             homeworks = {str(w['id']): w for w in day.get('homeworks', [])}
             works = {str(w['id']): w for w in day.get('works', [])}
             work_types = {str(wt['id']): wt['name'] for wt in day.get('workTypes', [])}
             lesson_logs = {str(l['lesson_str']): l['status'] for l in day.get('lessonLogEntries', []) 
-                          if str(l['person_str']) == self.person_id}
+                        if str(l['person_str']) == self.person_id}
             marks = {str(m['work']): m for m in day.get('marks', []) if str(m['person']) == self.person_id}
             files = {str(f['id']): f for f in day.get('files', [])}
+            
             for lesson in day.get('lessons', []):
                 lesson_id = str(lesson.get('id', '0'))
                 if lesson_id in seen_lesson_ids:
                     self._log(f"Пропущен дублирующийся урок ID={lesson_id}")
                     continue
                 seen_lesson_ids.add(lesson_id)
+                
                 subject_id = str(lesson.get('subjectId', '0'))
                 if subject_id not in subjects:
                     self._log(f"Пропущен урок ID={lesson_id}: subject_id={subject_id} отсутствует")
                     continue
+                
                 lesson_number = lesson.get('number', 0)
                 subject_name = subjects.get(subject_id, 'Неизвестный предмет')
                 teacher_ids = lesson.get('teachers', [])
                 teacher_name = ', '.join(teachers.get(str(t), 'Неизвестно') for t in teacher_ids) or 'Неизвестно'
+                
                 floor = lesson.get('floor', '')
-                classroom = f"{lesson.get('building', '')} {lesson.get('place', 'Не указан')}".strip()
+                classroom = f"{lesson.get('building', 'Не указан')} {lesson.get('place', 'Не указан')}".strip()
+                if classroom == "Не указан Не указан":
+                    classroom = "Не указан"
                 if floor:
                     classroom += f", этаж {floor}"
+                
                 lesson_title = lesson.get('title', subject_name) or subject_name
                 time_str = lesson.get('hours', 'Неизвестное время')
                 lesson_status = lesson.get('status', 'Неизвестно')
                 attendance = lesson_logs.get(lesson_id, 'Присутствовал')
+                
+                # Обновляем кэш учителей
                 for t in day.get('teachers', []):
                     teacher_id = str(t['person']['id'])
                     if teacher_id not in self._teacher_cache:
@@ -557,6 +663,20 @@ class DnevnikFormatter:
                             'email': '',
                             'position': 'Неизвестно'
                         }
+                
+                # Формируем список работ
+                lesson_works = []
+                for work_id in lesson.get('works', []):
+                    work_id_str = str(work_id)
+                    work = works.get(work_id_str)
+                    if work:
+                        work_type_id = str(work.get('workType', '0'))
+                        work_type_name = work_types.get(work_type_id, self._work_types_cache.get(work_type_id, 'Неизвестный тип'))
+                        lesson_works.append({
+                            'work': work_type_name
+                        })
+                
+                # Формируем домашние задания
                 homework_text = []
                 homework_files = []
                 is_important = False
@@ -577,11 +697,14 @@ class DnevnikFormatter:
                     sent_date = hw.get('sentDate')
                     if sent_date:
                         sent_dates.append(sent_date)
+                
                 if not homework_text and not homework_files:
                     homework_text = ['Нет задания']
                 homework = '\n'.join(homework_text)
                 homework_files = list(set(homework_files))
                 sent_date = max(sent_dates, default=None) if sent_dates else None
+                
+                # Формируем оценки
                 mark_details = []
                 for work_id in lesson.get('works', []):
                     work_id_str = str(work_id)
@@ -591,10 +714,11 @@ class DnevnikFormatter:
                         work_type_id = str(work.get('workType', '0'))
                         mark_details.append({
                             'value': mark.get('value', ''),
-                            'work_type': work_types.get(work_type_id, 'Неизвестно'),
+                            'work_type': work_types.get(work_type_id, self._work_types_cache.get(work_type_id, 'Неизвестный тип')),
                             'mood': mark.get('mood', 'Нет'),
                             'lesson_title': lesson_title
                         })
+                
                 formatted_schedule.append({
                     'time': time_str,
                     'subject': subject_name,
@@ -605,13 +729,14 @@ class DnevnikFormatter:
                     'mark_details': mark_details,
                     'classroom': classroom,
                     'lesson_id': lesson_id,
-                    'works': lesson.get('works', []),
+                    'works': lesson_works,
                     'lesson_number': lesson_number,
                     'lesson_status': lesson_status,
                     'attendance': attendance,
                     'is_important': is_important,
                     'sent_date': sent_date
                 })
+        
         formatted_schedule = sorted(formatted_schedule, key=lambda x: x['lesson_number'])
         self._schedule_cache[date_str] = formatted_schedule
         self._log(f"Итоговое расписание за {date_str}: {len(formatted_schedule)} уроков")
@@ -1355,83 +1480,152 @@ class DnevnikFormatter:
         ranking.sort(key=lambda x: x['avg_grade'], reverse=True)
         return ranking
 
-    def get_class_stats(self, quarter: int, study_year: Optional[int] = None) -> Dict:
+
+    def get_upcoming_tests(self) -> List[Dict[str, str]]:
         """
-        Получает статистику класса за четверть.
+        Возвращает список предстоящих тестов на две недели вперёд, 
+        отфильтрованных по значимости (вес >= 5).
 
         **Назначение**:
-        Формирует общую статистику класса, включая общее количество оценок, средний балл
-        и распределение оценок.
+        Извлекает из расписания информацию о предстоящих тестах и контрольных работах за 
+        период в две недели от текущей даты, основываясь на весе типов работ.
 
         **Входные параметры**:
-        - quarter (int): Номер четверти (1-4).
-        - study_year (int, необязательный): Учебный год (например, 2025 для 2024-2025).
-                                        Если None, выбирается период по текущей дате или ближайший.
-                                        По умолчанию None.
+        - None: Использует текущую дату и существующие методы класса.
 
         **Выходные данные**:
-        - Dict: Словарь, содержащий:
-            - total_marks (int): Общее количество оценок.
-            - average_class_grade (float): Средний балл класса, округлённый до 2 знаков.
-            - grade_distribution (dict): Процентное распределение оценок {оценка: процент}.
+        - List[Dict[str, str]]: Список словарей, каждый из которых содержит:
+            - date (str): Дата теста в формате YYYY-MM-DD.
+            - subject (str): Название предмета.
+            - work_type (str): Тип работы (например, "Контрольная работа").
+            - description (str): Описание теста, включая тип работы и тему урока.
+            - weight (int): Вес работы (значимость).
 
         **Алгоритм работы**:
-        1. Проверяет валидность номера четверти.
-        2. Получает период через _get_quarter_period_id.
-        3. Для каждого предмета запрашивает гистограмму оценок.
-        4. Суммирует оценки и вычисляет статистику.
-        5. При ошибке возвращает пустой словарь.
-
-        **Исключения**:
-        - ValueError: Если номер четверти некорректен.
-        - Exception: Ловится для обработки ошибок API.
+        1. Определяет период: текущая дата + 14 дней.
+        2. Запрашивает расписание через get_formatted_schedule.
+        3. Проходит по урокам, проверяет работы в поле works.
+        5. Форматирует и сортирует результат по дате.
 
         **Примечания**:
-        - Учитывает только числовые оценки.
+        - Использует self.title_to_weight для определения значимости работ.
+        - Ограничивает выборку одним тестом на предмет в день, выбирая самый значимый.
         """
-        if quarter not in [1, 2, 3, 4]:
-            raise ValueError("Номер четверти должен быть от 1 до 4")
-        period_data = self._get_quarter_period_id(quarter=quarter, study_year=study_year)
-        if not period_data:
-            return {}
-        period_id, start_date, finish_date = period_data
-        total_grades = defaultdict(int)
-        total_marks = 0
-        for subject_id in self._subject_cache:
-            try:
-                histogram = self.api.get_subject_marks_histogram(self.group_id, period_id, int(subject_id))
-                for work in histogram.get('works', []):
-                    for mark_number in work.get('markNumbers', []):
-                        for mark in mark_number.get('marks', []):
-                            value = str(mark.get('value'))
-                            count = mark.get('count', 0)
-                            if value.replace('.', '', 1).isdigit():
-                                total_grades[value] += count
-                                total_marks += count
-            except Exception as e:
-                self._log(f"Ошибка при получении статистики по предмету {subject_id}: {str(e)}")
-        average_class_grade = sum(float(k) * v for k, v in total_grades.items()) / total_marks if total_marks else 0
-        grade_distribution = {k: v / total_marks * 100 for k, v in total_grades.items()} if total_marks else {}
-        return {
-            'total_marks': total_marks,
-            'average_class_grade': round(average_class_grade, 2),
-            'grade_distribution': grade_distribution
-        }
+        # Получаем расписание на две недели вперёд
+        start_date = datetime.now()
+        end_date = start_date + timedelta(days=14)
+        
+        # Логируем запрос для отладки
+        self._log(f"Fetching schedule from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+        
+        # Получаем расписание
+        schedule = self.get_formatted_schedule(start_date, end_date)
+        print(schedule)
+        
+        # Собираем тесты
+        tests = []
+        for date_str, lessons in schedule.items():
+            for lesson in lessons:
+                for work in lesson.get("works", []):
+                    work_type = work["work"]
+                    # Проверяем, есть ли тип работы в словаре и его вес
+                    if work_type in self.title_to_weight:
+                        weight = self.title_to_weight[work_type]
+                        test_info = {
+                            "date": date_str,
+                            "subject": lesson["subject"],
+                            "work_type": work_type,
+                            "description": f"{work_type}: {lesson['title']}",
+                            "weight": weight
+                        }
+                        tests.append(test_info)
+        
+        # Сортируем тесты по дате
+        tests.sort(key=lambda x: datetime.strptime(x["date"], "%Y-%m-%d"))
+        
+        # Логируем результат
+        self._log(f"Найдено предстоящих тестов: {len(tests)}")
+        if not tests:
+            self._log("No upcoming tests found in the schedule.")
+        
+        return tests
 
-if __name__ == "__main__":
-    """
-    Точка входа для тестирования класса DnevnikFormatter.
 
-    Инициализирует formatter с токеном, включает отладочный режим и получает последние 5 оценок
-    в качестве примера использования.
-    """
-    token = ""
-    formatter = DnevnikFormatter(token=token, debug_mode=True)
 
-    import csv
 
-    ranking = formatter.get_class_ranking(study_year=2025, quarter=3)
-    with open("ranking.csv", "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["name", "avg_grade", "marks_count"])
-        writer.writeheader()
-        writer.writerows(ranking)
+
+    def analyze_data(self, analysis_type: str, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, quarter: Optional[int] = None, study_year: Optional[int] = None) -> str:
+        """
+        Выполняет ИИ-анализ данных в зависимости от указанного типа.
+
+        **Назначение**:
+        Анализирует данные (расписание, оценки или рейтинг) с использованием ИИ, загружая соответствующий промпт из prompts.json.
+
+        **Входные параметры**:
+        - analysis_type (str): Тип анализа ('weeks', 'marks', 'ranking').
+        - start_date (datetime, необязательный): Начальная дата для 'weeks' и 'marks'.
+        - end_date (datetime, необязательный): Конечная дата для 'weeks' и 'marks'.
+        - quarter (int, необязательный): Номер четверти для 'ranking' (1-4).
+        - study_year (int, необязательный): Учебный год для 'ranking'.
+
+        **Выходные данные**:
+        - str: Ответ ИИ в виде структурированного текста или сообщение об ошибке.
+
+        **Алгоритм работы**:
+        1. Читает промпты из prompts.json.
+        2. Проверяет валидность analysis_type.
+        3. Собирает данные в зависимости от типа анализа.
+        4. Формирует полный промпт с данными.
+        5. Выполняет запрос к API через make_ai_request.
+        6. Возвращает ответ ИИ.
+        """
+        valid_types = ['weeks', 'marks', 'ranking']
+        if analysis_type not in valid_types:
+            self._log(f"Некорректный тип анализа: {analysis_type}. Допустимые типы: {valid_types}")
+            return f"Ошибка: Некорректный тип анализа '{analysis_type}'"
+
+        try:
+            # Читаем промпты
+            prompts = self._read_prompts()
+            prompt_text = prompts.get(analysis_type, "")
+            if not prompt_text:
+                self._log(f"Промпт для типа '{analysis_type}' не найден в prompts.json")
+                return f"Ошибка: Промпт для '{analysis_type}' не найден"
+
+            # Собираем данные в зависимости от типа анализа
+            if analysis_type == 'weeks':
+                if not start_date or not end_date:
+                    self._log("Для анализа недель требуются start_date и end_date")
+                    return "Ошибка: Укажите start_date и end_date"
+                schedule_data = self.get_formatted_schedule(start_date, end_date)
+                works_data = self.get_upcoming_tests()
+                full_prompt = prompt_text.format(
+                    schedule_data=json.dumps(schedule_data, ensure_ascii=False, indent=2),
+                    works_data=json.dumps(works_data, ensure_ascii=False, indent=2)
+                )
+            elif analysis_type == 'marks':
+                if not start_date or not end_date:
+                    self._log("Для анализа оценок требуются start_date и end_date")
+                    return "Ошибка: Укажите start_date и end_date"
+                marks_data = self.get_formatted_marks(start_date, end_date)
+                full_prompt = prompt_text.format(
+                    marks_data=json.dumps(marks_data, ensure_ascii=False, indent=2)
+                )
+            elif analysis_type == 'ranking':
+                if not quarter:
+                    self._log("Для анализа рейтинга требуется quarter")
+                    return "Ошибка: Укажите quarter"
+                ranking_data = self.get_class_ranking(quarter, study_year)
+                full_prompt = prompt_text.format(
+                    ranking_data=json.dumps(ranking_data, ensure_ascii=False, indent=2)
+                )
+
+            # Выполняем запрос к API
+            response = self.make_ai_request(full_prompt)
+            return response
+
+        except Exception as e:
+            self._log(f"Ошибка при выполнении анализа '{analysis_type}': {str(e)}")
+            return f"Ошибка при выполнении анализа '{analysis_type}': {str(e)}"
+
+
