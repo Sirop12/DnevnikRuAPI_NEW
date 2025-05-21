@@ -149,6 +149,7 @@ result = await formatter.get_formatted_schedule(start_date, end_date=None)
   - `files` (`list`): Файлы задания (имя и URL).
   - `title` (`str`): Тема урока.
   - `teacher` (`str`): Имя учителя.
+  - `mark_details` (`list`): Оценки (value, work_type, mood, lesson_title).
   - `works` (`list`): Тесты/работы (`work: str`, `weight: int`).
   - `place` (`str`): Место проведения (кабинет).
   - `lesson_id` (`str`): ID урока.
