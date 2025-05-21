@@ -37,5 +37,5 @@ async def main():
 ```
 
 ## Документация
-- [Синхронный модуль (`DnevnikFormatter`)](./docs/DnevnikFormatter.md)
-- [Асинхронный модуль (`DnevnikFormatterAsync`)](./docs/DnevnikFormatterAsync.md)
+- [Синхронный модуль (`DnevnikFormatter`)](./DnevnikFormatter.md)
+- [Асинхронный модуль (`DnevnikFormatterAsync`)](./DnevnikFormatterAsync.md)
