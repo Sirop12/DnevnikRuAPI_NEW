@@ -11,7 +11,12 @@ import re
 from openai import AsyncOpenAI
 import os
 import logging
-
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.prompt import Prompt, IntPrompt
+from rich.text import Text
+from rich import box
 # Ключевая константа: API-ключ для интеграции с DeepSeek через OpenRouter
 # Этот ключ используется для отправки запросов к AI для анализа данных
 API_KEY = "API_KEY"
@@ -195,7 +200,7 @@ class DnevnikFormatter:
                 # Извлечение идентификаторов из контекста
                 self.person_id = str(self.context.get('personId', '0'))
                 self.school_id = str(self.context.get('schools', [{}])[0].get('id', '0'))
-                self.group_id = str(self.context.get('eduGroups', [{}])[0].get('id_str', '0'))
+                self.group_id = 2255245971833784776
 
                 # Проверка корректности идентификаторов
                 if not self.person_id or not self.school_id or not self.group_id:
@@ -793,6 +798,62 @@ class DnevnikFormatter:
                 self._log(f"Ошибка при загрузке урока {lesson_id}: {str(e)}")
                 self._lesson_cache[lesson_id] = {}
         return self._lesson_cache.get(lesson_id, {})
+    
+
+    async def _get_work_marks_by_id(self, work_id: int) -> List[Dict[str, str]]:
+        """
+        Получает список учеников и их оценок для указанной работы асинхронно.
+        
+        Args:
+            work_id (int): ID работы.
+            
+        Returns:
+            List[Dict[str, str]]: Список словарей с полями:
+                - name (str): Краткое имя ученика.
+                - mark (str): Оценка.
+                
+        Raises:
+            ValueError: Если work_id некорректен.
+            Exception: При сетевых ошибках (логируется).
+        """
+        result = []
+        try:
+            # Проверяем наличие учеников в кэше
+            if not self._student_cache:
+                self._log("Student cache is empty, cannot fetch work marks")
+                return result
+
+            self._log(f"Запрос оценок для work_id={work_id}, учеников в кэше: {len(self._student_cache)}")
+            async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
+                for student_id, student_name in self._student_cache.items():
+                    try:
+                        # Пытаемся получить оценки, учитывая возможную корутину
+                        marks_response = await dn.get_person_work_marks(person_id=student_id, work_id=work_id)
+                        marks_response = await marks_response
+
+
+                        # Обрабатываем каждую оценку
+                        for mark in marks_response:
+                            mark_value = mark.get("value", "")
+                            if mark_value:
+                                result.append({
+                                    "name": student_name,
+                                    "mark": mark_value
+                                })
+                    except Exception as e:
+                        self._log(f"Ошибка при запросе оценок для person_id={student_id}: {e}")
+                        continue
+            
+            self._log(f"Fetched marks for work_id={work_id}: {len(result)} records")
+            return result
+            
+        except ValueError as e:
+            self._log(f"Invalid work_id={work_id}: {e}")
+            raise
+        except Exception as e:
+            self._log(f"Error fetching marks for work_id={work_id}: {e}")
+            return result
+
 
     async def _get_formatted_schedule_day(self, date: datetime) -> List[Dict[str, any]]:
         """
@@ -1105,140 +1166,134 @@ class DnevnikFormatter:
         """
         Асинхронно получает последние оценки ученика, с возможностью фильтрации по предмету.
 
-        **Назначение**:
-        Этот метод извлекает указанное количество последних оценок за последние 90 дней,
-        форматируя их с информацией о предмете, типе работы, теме урока и распределении оценок в классе.
+        Args:
+            count (int, optional): Количество оценок. Defaults to 5.
+            subject_id (Optional[int], optional): ID предмета. Defaults to None.
 
-        **Параметры**:
-        - count (int, optional): Количество оценок для возврата. По умолчанию 5.
-        - subject_id (int, optional): ID предмета для фильтрации оценок. Если None, возвращаются
-          оценки по всем предметам.
+        Returns:
+            List[Dict[str, any]]: Список словарей с полями:
+                - subject (str): Название предмета.
+                - work_type (str): Тип работы.
+                - lesson_title (str): Тема урока.
+                - mark (str): Оценка.
+                - class_distribution (dict): Распределение оценок:
+                    - mark (str): Оценка.
+                    - count (int): Количество.
+                    - student_marks (List[Dict[str, str]]): Список учеников с оценками:
+                        - name (str): Краткое имя.
+                        - mark (str): Оценка.
+                - date (str): Дата оценки (DD.MM.YYYY).
 
-        **Алгоритм работы**:
-        1. Проверяет, существует ли `subject_id` в `_subject_cache`. Если нет, отключает фильтр
-           и логирует предупреждение.
-        2. Устанавливает период запроса: от текущей даты минус 90 дней до текущей даты.
-        3. Выполняет запрос к `get_person_marks` для получения всех оценок за период.
-        4. Сортирует оценки по дате в обратном порядке и ограничивает их количеством `count`.
-        5. Для каждой оценки:
-           - Извлекает ID урока, ID работы, дату.
-           - Получает информацию об уроке через `_get_lesson_info`.
-           - Проверяет соответствие предмета фильтру `subject_id`.
-           - Форматирует данные: предмет, тип работы, тема урока, оценка, дата.
-           - Запрашивает гистограмму оценок для работы через `get_marks_histogram`, чтобы
-             получить распределение оценок в классе.
-        6. Логирует обработку каждой оценки и любые ошибки.
-        7. Возвращает список отформатированных оценок.
-
-        **Возвращаемые значения**:
-        - List[Dict[str, any]]: Список словарей с информацией об оценках:
-          - `subject`: Название предмета.
-          - `work_type`: Тип работы (например, контрольная).
-          - `lesson_title`: Тема урока.
-          - `mark`: Значение оценки.
-          - `class_distribution`: Словарь с распределением оценок в классе (например, {'5': 10, '4': 5}).
-          - `date`: Дата оценки в формате DD.MM.YYYY.
-
-        **Исключения**:
-        - Exception: Ошибки API (например, неверный токен, недоступность сервера).
-          Обрабатываются внутри метода, возвращается пустой список.
-
-        **Пример использования**:
-        ```python
-        marks = await formatter.get_last_marks(count=5, subject_id=123)
-        for mark in marks:
-            print(f"{mark['date']} - {mark['subject']}: {mark['mark']}")
-        ```
-
-        **Ошибки и их обработка**:
-        - **Некорректный subject_id**: Если предмет не найден в `_subject_cache`, фильтр отключается.
-          Решение: Проверить ID предмета или обновить кэш.
-        - **Ошибка API**: Например, ошибка авторизации или недоступность сервера.
-          Возвращается пустой список. Решение: Проверить токен и соединение.
-        - **Пустой ответ API**: Если оценок нет, возвращается пустой список.
-          Решение: Проверить наличие оценок в Дневник.ру.
-        - **Некорректная дата**: Если формат даты оценки не соответствует ожидаемому,
-          используется текущая дата. Решение: Проверить структуру ответа API.
-        - **Ошибка гистограммы**: Если не удается получить распределение оценок,
-          поле `class_distribution` остается пустым. Решение: Проверить ID работы.
-
-        **Замечания**:
-        - Период 90 дней жестко закодирован, что может не охватывать старые оценки.
-        - Запрос гистограммы для каждой оценки увеличивает нагрузку на API.
-        - Формат возвращаемых данных удобен для отображения в Telegram-ботах.
+        Raises:
+            ValueError: Если count <= 0.
         """
-        if subject_id and str(subject_id) not in self._subject_cache:
-            self._log(f"Предупреждение: subject_id={subject_id} отсутствует в _subject_cache. Фильтр отключён.")
-            subject_id = None
+        if count <= 0:
+            raise ValueError("Count must be positive")
+
         result = []
         try:
+            if not self._student_cache:
+                self._log("Student cache is empty, attempting to reload")
+                await self._load_students()
+                if not self._student_cache:
+                    self._log("Failed to load students, class_distribution will be empty")
+
+            if not self._subject_cache:
+                self._log("Subject cache is empty, attempting to reload")
+                await self._load_subjects()
+
+            if subject_id and str(subject_id) not in self._subject_cache:
+                self._log(f"Предупреждение: subject_id={subject_id} отсутствует в _subject_cache. Фильтр отключён.")
+                subject_id = None
+
+            async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=90)
+                marks = await dn.get_person_marks(self.person_id, self.school_id, start_date, end_date)
+                self._log(f"Получено оценок: {len(marks)}")
+
+            def parse_mark_date(date_str):
+                try:
+                    return datetime.strptime(date_str, '%Y-%m-%dT%H:%M:%S.%f')
+                except ValueError:
+                    try:
+                        return datetime.strptime(date_str, '%Y-%m-%dT%H:%M:%S')
+                    except ValueError:
+                        try:
+                            return datetime.strptime(date_str, '%Y-%m-%d')
+                        except ValueError:
+                            self._log(f"Некорректный формат даты оценки: {date_str}")
+                            return datetime.now()
+
+            # Фильтрация по дате (последние 90 дней)
             end_date = datetime.now()
             start_date = end_date - timedelta(days=90)
-            async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
-                marks = await dn.get_person_marks(self.person_id, self.school_id, start_date, end_date)
-                self._log(f"Получено оценок: {len(marks)} за период {start_date.strftime('%Y-%m-%d')} - {end_date.strftime('%Y-%m-%d')}")
-        except Exception as e:
-            self._log(f"Ошибка при получении оценок: {str(e)}")
+            filtered_marks = [
+                mark for mark in marks
+                if parse_mark_date(mark.get('date', '1970-01-01')) >= start_date
+            ]
+            self._log(f"Отфильтровано оценок за последние 90 дней: {len(filtered_marks)}")
+
+            filtered_marks.sort(key=lambda x: parse_mark_date(x.get('date', '1970-01-01')), reverse=True)
+            filtered_marks = filtered_marks[:count]
+
+            for mark in filtered_marks:
+                lesson_id = str(mark.get('lesson_str', '0'))
+                work_id = str(mark.get('work_str', '0'))
+                mark_date = parse_mark_date(mark.get('date', '1970-01-01')).date()
+                lesson_data = await self._get_lesson_info(lesson_id)
+                subject_id_from_mark = str(lesson_data.get('subject', {}).get('id')) if lesson_data.get('subject') else None
+
+                if subject_id and subject_id_from_mark and str(subject_id) != subject_id_from_mark:
+                    self._log(f"Пропущена оценка для урока {lesson_id}: subject_id={subject_id_from_mark} не совпадает с {subject_id}")
+                    continue
+
+                mark_info = {
+                    'subject': self._subject_cache.get(subject_id_from_mark, 'Неизвестный предмет') if subject_id_from_mark else 'Неизвестный предмет',
+                    'work_type': 'Неизвестный тип',
+                    'lesson_title': lesson_data.get('title', 'Неизвестная тема') or 'Неизвестная тема',
+                    'mark': mark.get('value', 'Нет оценки'),
+                    'class_distribution': {},
+                    'date': mark_date.strftime('%d.%m.%Y')
+                }
+
+                if lesson_data.get('works'):
+                    for work in lesson_data.get('works', []):
+                        if str(work.get('id')) == work_id:
+                            work_type_id = str(work.get('workType', '0'))
+                            mark_info['work_type'] = self._work_types_cache.get(work_type_id, 'Неизвестный тип')
+                            self._log(f"Работа {work_id}: workType={work_type_id}, work_type={mark_info['work_type']}")
+                            break
+                    else:
+                        self._log(f"Работа {work_id} не найдена в lesson_data['works'] для урока {lesson_id}")
+
+                if work_id and work_id != '0' and self._student_cache:
+                    try:
+                        student_marks = await self._get_work_marks_by_id(int(work_id))
+                        distribution = {}
+                        for sm in student_marks:
+                            mark_value = sm["mark"]
+                            if mark_value not in distribution:
+                                distribution[mark_value] = {"count": 0, "student_marks": []}
+                            distribution[mark_value]["count"] += 1
+                            distribution[mark_value]["student_marks"].append({
+                                "name": sm["name"],
+                                "mark": mark_value
+                            })
+                        mark_info['class_distribution'] = distribution
+                        self._log(f"Распределение оценок для работы {work_id}: {len(student_marks)} записей")
+                    except Exception as e:
+                        self._log(f"Ошибка получения class_distribution для work_id={work_id}: {e}")
+
+                result.append(mark_info)
+
+            self._log(f"Fetched {len(result)} last marks, subject_id={subject_id}")
             return result
 
-        def parse_mark_date(date_str):
-            try:
-                return datetime.strptime(date_str, '%Y-%m-%dT%H:%M:%S.%f')
-            except ValueError:
-                try:
-                    return datetime.strptime(date_str, '%Y-%m-%dT%H:%M:%S')
-                except ValueError:
-                    self._log(f"Некорректный формат даты оценки: {date_str}")
-                    return datetime.now()
-
-        marks.sort(key=lambda x: parse_mark_date(x.get('date', '1970-01-01')), reverse=True)
-        marks = marks[:count]
-        for mark in marks:
-            lesson_id = str(mark.get('lesson_str', '0'))
-            work_id = str(mark.get('work_str', '0'))
-            mark_date = parse_mark_date(mark.get('date', '1970-01-01')).date()
-            lesson_data = await self._get_lesson_info(lesson_id)
-            subject_id_from_mark = str(lesson_data.get('subject', {}).get('id')) if lesson_data.get('subject') else None
-            if subject_id and subject_id_from_mark and str(subject_id) != subject_id_from_mark:
-                self._log(f"Пропущена оценка для урока {lesson_id}: subject_id={subject_id_from_mark} не совпадает с {subject_id}")
-                continue
-            mark_info = {
-                'subject': self._subject_cache.get(subject_id_from_mark, 'Неизвестный предмет') if subject_id_from_mark else 'Неизвестный предмет',
-                'work_type': 'Неизвестный тип',
-                'lesson_title': 'Неизвестная тема',
-                'mark': mark.get('value', 'Нет оценки'),
-                'class_distribution': {},
-                'date': mark_date.strftime('%d.%m.%Y')
-            }
-            self._log(f"Обрабатываю оценку: lesson_id={lesson_id}, subject_id={subject_id_from_mark}, mark={mark_info['mark']}")
-            if lesson_data.get('subject'):
-                mark_info['lesson_title'] = lesson_data.get('title', 'Неизвестная тема') or 'Неизвестная тема'
-                works = lesson_data.get('works', [])
-                for work in works:
-                    if str(work.get('id')) == work_id:
-                        work_type_id = str(work.get('workType', '0'))
-                        mark_info['work_type'] = self._work_types_cache.get(work_type_id, 'Неизвестный тип')
-                        self._log(f"Работа {work_id}: workType={work_type_id}, work_type={mark_info['work_type']}")
-                        break
-                else:
-                    self._log(f"Работа {work_id} не найдена в lesson_data['works'] для урока {lesson_id}")
-            try:
-                if work_id != '0':
-                    async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
-                        histogram = await dn.get_marks_histogram(int(work_id))
-                        mark_distribution = {}
-                        for mark_number in histogram.get('markNumbers', []):
-                            for mark in mark_number.get('marks', []):
-                                value = str(mark.get('value'))
-                                count = mark.get('count', 0)
-                                mark_distribution[value] = mark_distribution.get(value, 0) + count
-                        mark_info['class_distribution'] = mark_distribution
-                        self._log(f"Распределение оценок для работы {work_id}: {mark_info['class_distribution']}")
-            except Exception as e:
-                self._log(f"Ошибка при получении гистограммы для работы {work_id}: {str(e)}")
-            result.append(mark_info)
-        return result
-
+        except Exception as e:
+            self._log(f"Unexpected error in get_last_marks: {e}")
+            return result
+        
     async def get_formatted_marks(self, start_date: datetime, end_date: Optional[datetime] = None) -> Dict[str, List[Dict[str, str]]]:
         """
         Асинхронно получает оценки за период, сгруппированные по предметам.
@@ -2231,56 +2286,40 @@ class DnevnikFormatter:
             return f"Ошибка при выполнении анализа '{analysis_type}': {str(e)}"
 
 async def main():
-    """
-    Пример использования класса DnevnikFormatter.
-
-    **Назначение**:
-    Эта функция демонстрирует, как инициализировать `DnevnikFormatter` и использовать его методы
-    для получения данных, таких как рейтинг класса. Используется для тестирования и отладки.
-
-    **Алгоритм работы**:
-    1. Задает тестовый токен API Дневник.ру (в реальном приложении должен быть защищен).
-    2. Устанавливает начальную дату (в примере — 13 мая 2025 года).
-    3. Создает экземпляр `DnevnikFormatter` с токеном и режимом отладки по умолчанию (True).
-    4. Вызывает метод `initialize` для настройки API и загрузки начальных данных.
-    5. Вызывает метод `get_class_ranking` для четвертой четверти и выводит результат.
-    6. Выполняется в асинхронном контексте через `asyncio.run`.
-
-    **Возвращаемые значения**:
-    - None: Функция только выполняет операции и выводит результат.
-
-    **Исключения**:
-    - Exception: Ошибки инициализации или запросов к API. Не обрабатываются в функции,
-      поэтому могут привести к аварийному завершению.
-
-    **Пример использования**:
-    ```python
-    asyncio.run(main())
-    ```
-
-    **Ошибки и их обработка**:
-    - **Неверный токен**: Приведет к ошибке в `initialize`. Решение: Заменить токен на действительный.
-    - **Ошибка API**: Если запрос `get_class_ranking` не удастся, программа завершится с ошибкой.
-      Решение: Добавить обработку исключений в реальном приложении.
-    - **Отсутствие данных**: Если рейтинг пуст (например, из-за отсутствия оценок),
-      будет выведен пустой список. Решение: Проверить данные в Дневник.ру.
-
-    **Замечания**:
-    - Это минимальный пример, в реальном приложении нужно добавить обработку ошибок.
-    - Токен жестко закодирован, что небезопасно; в продакшене используйте переменные окружения.
-    - Вывод рейтинга класса демонстрирует один из методов, но можно добавить другие, например,
-      `get_upcoming_tests` или `get_formatted_schedule`.
-    """
-    token = "tokenDnevnik"
-    # Замените на ваш токен
-    start_date = datetime(2025, 5, 13)
-    formatter = DnevnikFormatter(token=token)
+    token = "API_KEY "  # Замените на ваш токен
+    formatter = DnevnikFormatter(token=token, debug_mode=True)
+    console = Console()
     await formatter.initialize()
-    tests2 = await formatter.get_formatted_schedule(start_date)
-    print(tests2)
 
-
-
+    try:
+        await formatter._load_students()
+        console.print(f"[bold green]Учеников в кэше: {len(formatter._student_cache)}[/bold green]")
+        work_id = 2338040528845190453
+        marks = await formatter._get_work_marks_by_id(work_id)
+        table = Table(title=f"Оценки за работу {work_id}", box=box.ROUNDED, show_header=True, header_style="bold magenta")
+        table.add_column("Ученик", style="cyan", no_wrap=True)
+        table.add_column("Оценка", justify="center")
+    
+        if not marks:
+            console.print("[bold red]Оценки не найдены.[/bold red]")
+        else:
+            for mark in sorted(marks, key=lambda x: x["name"].split()[-1]):
+                mark_value = mark["mark"]
+                color = (
+                    "green" if mark_value == "5" else
+                    "green" if mark_value == "4" else
+                    "yellow" if mark_value == "3" else
+                    "red" if mark_value == "2" else
+                    "white"
+                )
+                table.add_row(mark["name"], f"[{color}]{mark_value}[/{color}]")
+        
+        console.print(table)
+        console.print(f"[bold]Всего оценок: {len(marks)}[/bold]")
+        
+    except Exception as e:
+        console.print(f"[bold red]Ошибка: {e}[/bold red]")
+        formatter._log(f"Ошибка в main: {e}", "ERROR")
 
 if __name__ == "__main__":
     asyncio.run(main())
