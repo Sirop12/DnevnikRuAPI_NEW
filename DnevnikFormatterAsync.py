@@ -200,7 +200,8 @@ class DnevnikFormatter:
                 # Извлечение идентификаторов из контекста
                 self.person_id = str(self.context.get('personId', '0'))
                 self.school_id = str(self.context.get('schools', [{}])[0].get('id', '0'))
-                self.group_id = 2255245971833784776
+                self.group_id = str(self.context.get('eduGroups', [{}])[0].get('id_str', '0'))
+                #self.group_id = 2255245971833784776 (14 лицей 8К)
 
                 # Проверка корректности идентификаторов
                 if not self.person_id or not self.school_id or not self.group_id:
