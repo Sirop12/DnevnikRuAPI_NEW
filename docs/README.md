@@ -1,5 +1,4 @@
-
-
+#НА ДАННЫЙ МОМЕНТ ДНЕВНИК ЗАБЛОКИРОВАЛ ПОЛУЧЕНИЕ ТОКЕНА
 # Документация по модулю DnevnikFormatter
 
 ![Static Badge](https://img.shields.io/badge/DnevnikRuAPI_NEW-Sirop12)
