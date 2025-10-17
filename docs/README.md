@@ -1,4 +1,5 @@
 # НА ДАННЫЙ МОМЕНТ ДНЕВНИК ЗАБЛОКИРОВАЛ ПОЛУЧЕНИЕ ТОКЕНА
+я начал разрпаботку новго способа [Бета-тестирование](https://t.me/Sirop1)
 # Документация по модулю DnevnikFormatter
 
 ![Static Badge](https://img.shields.io/badge/DnevnikRuAPI_NEW-Sirop12)
