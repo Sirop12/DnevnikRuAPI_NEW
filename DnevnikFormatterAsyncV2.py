@@ -999,14 +999,15 @@ class DnevnikFormatter:
         - Optional[Tuple[str, datetime, datetime]]: ID и даты периода.
         """
         start_time = time.time()
-        if quarter not in [1, 2, 3, 4]:
+        if quarter not in [1, 2, 3, 4, 5, 6]:
             logger.error(f"Некорректная четверть: {quarter}")
             return None
         try:
             async with self.semaphore:
                 async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
                     periods = await dn.get(f"edu-groups/{self.group_id}/reporting-periods")
-            quarter_to_number = {'Quarter': quarter - 1, 'Semester': 0 if quarter in [1, 2] else 1}
+                    logger.info(periods)
+            quarter_to_number = {'Quarter': quarter - 1, 'Semester': 0 if quarter in [1, 2] else 1,'Trimester': quarter - 1,'Module': quarter - 1}
             current_date = datetime.now()
             candidate_periods = []
             min_date_diff = None
@@ -1018,7 +1019,7 @@ class DnevnikFormatter:
                 finish_date_str = period.get('finish', '')
                 period_year = period.get('year', 0)
                 period_name = period.get('name', 'Неизвестный период')
-                if period_type not in ['Quarter', 'Semester']:
+                if period_type not in ['Quarter', 'Semester', 'Trimester', 'Module']:
                     continue
                 if period_number != quarter_to_number.get(period_type):
                     continue
@@ -1046,8 +1047,8 @@ class DnevnikFormatter:
                     closest_period = period_data
             if closest_period:
                 logger.info(f"Выбран ближайший период: ID={closest_period[0]}, name={closest_period[3]}")
-                return closest_period[:3]
-            logger.warning(f"Период для четверти {quarter} не найден")
+                return closest_period
+            logger.warning(f"Период для {quarter} не найден")
             return None
         except Exception as e:
             logger.error(f"Ошибка получения периодов: {str(e)}")
