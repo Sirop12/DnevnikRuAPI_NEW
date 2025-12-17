@@ -1083,7 +1083,7 @@ class DnevnikFormatter:
         period_data = await self._get_quarter_period_id(quarter, study_year)
         if not period_data:
             return []
-        period_id, start_date, finish_date = period_data
+        period_id, start_date, finish_date, period_name = period_data
         try:
             async with self.semaphore:
                 async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
@@ -1162,7 +1162,7 @@ class DnevnikFormatter:
         period_data = await self._get_quarter_period_id(quarter, study_year)
         if not period_data:
             return []
-        period_id, start_date, finish_date = period_data
+        period_id, start_date, finish_date, period_name = period_data
         ranking = []
         async def fetch_grades(student_id, student_name):
             async with self.semaphore:
@@ -1216,7 +1216,7 @@ class DnevnikFormatter:
         period_data = await self._get_quarter_period_id(quarter, study_year)
         if not period_data:
             return {}
-        period_id, start_date, finish_date = period_data
+        period_id, start_date, finish_date, period_name= period_data
         try:
             async with self.semaphore:
                 async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
@@ -1263,7 +1263,7 @@ class DnevnikFormatter:
         period_data = await self._get_quarter_period_id(quarter, study_year)
         if not period_data:
             return []
-        period_id, start_date, finish_date = period_data
+        period_id, start_date, finish_date, period_name= period_data
         if str(subject_id) not in self._subject_cache:
             logger.error(f"Предмет {subject_id} отсутствует")
             return []
@@ -1401,3 +1401,63 @@ class DnevnikFormatter:
             elapsed_time = time.time() - start_time
             logger.info(f"Анализ данных '{analysis_type}' завершен за {elapsed_time:.2f} секунд")
 
+"""def load_students_from_files(files: list[str]) -> Dict[int, str]:
+
+    students = {}
+
+    for file_path in files:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        for student in data:
+            student_id = int(student["userId_str"])
+            student_name = student["shortName"]
+
+            # если вдруг одинаковые имена — ID всё равно уникален
+            students[student_id] = student_name
+
+    return students
+
+
+
+student_files = [
+    r"F:\dn_stat_bot\8Б.json",
+    r"F:\dn_stat_bot\8В.json",
+    r"F:\dn_stat_bot\8Г.json",
+    r"F:\dn_stat_bot\8Д.json",
+    r"F:\dn_stat_bot\8A.json",
+]
+
+def print_ranking(ranking: list[dict], top: int | None = None):
+
+    if not ranking:
+        print("Рейтинг пуст")
+        return
+
+    if top:
+        ranking = ranking[:top]
+
+    print("=" * 78)
+    print(f"{'№':>3} | {'Ученик':<25} | {'Средний балл':^13} | {'Оценок':^8}")
+    print("=" * 78)
+
+    for i, student in enumerate(ranking, start=1):
+        print(
+            f"{i:>3} | "
+            f"{student['name']:<25} | "
+            f"{student['avg_grade']:^13.2f} | "
+            f"{student['marks_count']:^8}"
+        )
+
+    print("=" * 78)
+    print(f"Всего учеников: {len(ranking)}")
+
+async def main():
+    formatter = DnevnikFormatter(token="bPcU8JTfAGkyVUotT0sdaj5w1gP6E3Fc")
+    await formatter.initialize()
+    formatter._student_cache = load_students_from_files(student_files)
+    print("load_students_from_files")
+    schedule = await formatter.get_class_ranking(2)
+    print_ranking(schedule)
+    
+asyncio.run(main())"""
