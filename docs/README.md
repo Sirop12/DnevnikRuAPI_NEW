@@ -1,6 +1,5 @@
-# НА ДАННЫЙ МОМЕНТ ДНЕВНИК ЗАБЛОКИРОВАЛ ПОЛУЧЕНИЕ ТОКЕНА
-я начал разрпаботку новго способа [Бета-тестирование](https://t.me/Sirop1)
-# Документация по модулю DnevnikFormatter
+# поддержка осуществляется только для версии
+# Документация по модулю DnevnikFormatterAsyncV2.py
 
 ![Static Badge](https://img.shields.io/badge/DnevnikRuAPI_NEW-Sirop12)
 ![GitHub top language](https://img.shields.io/github/languages/top/Sirop12/DnevnikRuAPI_NEW)
