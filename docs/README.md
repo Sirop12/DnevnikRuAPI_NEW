@@ -1,5 +1,5 @@
-# поддержка осуществляется только для версии
-# Документация по модулю DnevnikFormatterAsyncV2.py
+# поддержка осуществляется только для версии DnevnikFormatterAsyncV2.py
+# Документация по модулю DnevnikFormatter
 
 ![Static Badge](https://img.shields.io/badge/DnevnikRuAPI_NEW-Sirop12)
 ![GitHub top language](https://img.shields.io/github/languages/top/Sirop12/DnevnikRuAPI_NEW)
