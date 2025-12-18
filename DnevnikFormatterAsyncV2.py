@@ -101,10 +101,15 @@ class DnevnikFormatter:
         self.group_id = None
         self._lesson_cache = {}
         self._subject_cache = {}
-        self._student_cache = {}
+        self._student_cache = {}  # student_id: {'name': name, 'group_id': gid, 'group_name': gname}
         self._teacher_cache = {}
+        self._parallel_students_cache = {}
         self._work_types_cache = {}
         self._schedule_cache = {}
+        self._school_students_cache = {}
+        self._school_groups_cache = {}  # id_str: name
+        # В методе initialize, после получения context
+        self.class_id = self.group_id  # для совместимости
         self.semaphore = asyncio.Semaphore(max_concurrent_requests)
         self.title_to_weight = {
             'Административная контрольная работа': 10,
@@ -166,6 +171,7 @@ class DnevnikFormatter:
                 self.person_id = str(self.context.get('personId', '0'))
                 self.school_id = str(self.context.get('schools', [{}])[0].get('id', '0'))
                 self.group_id = str(self.context.get('eduGroups', [{}])[0].get('id_str', '0'))
+                self.class_name = self.context.get('eduGroups', [{}])[0].get('name', 'Неизвестный класс')
 
                 if not self.person_id or not self.school_id or not self.group_id:
                     raise ValueError("Не удалось получить person_id, school_id или group_id")
@@ -175,8 +181,8 @@ class DnevnikFormatter:
                 await asyncio.gather(
                     self._load_subjects(),
                     self._load_students(),
-                    self._load_teachers(),
                     self._load_work_types(),
+                    self._load_school_groups(),
                     return_exceptions=True
                 )
         except Exception as e:
@@ -286,7 +292,177 @@ class DnevnikFormatter:
         finally:
             elapsed_time = time.time() - start_time
             logger.info(f"Загрузка типов работ завершена за {elapsed_time:.2f} секунд")
+    async def _load_school_groups(self):
+        """
+        Загружает и кэширует список главных групп (классов) всей школы через учителей.
+        **Назначение**:
+        Поскольку нет прямого метода для получения всех групп школы, перебирает учителей,
+        запрашивает группы каждого учителя и собирает уникальные главные группы (type='Group', parentIds=[]).
+        **Алгоритм работы**:
+        1. Загружает учителей, если кэш пуст.
+        2. Для каждого учителя запрашивает его группы через /persons/{teacher_id}/schools/{school_id}/edu-groups/teacher.
+        3. Извлекает уникальные главные группы (id_str и name).
+        4. Сохраняет в _school_groups_cache.
+        5. Логирует успех или ошибки.
+        **Возвращаемые значения**:
+        - None: Заполняет кэш.
+        """
+        start_time = time.time()
+        self._school_groups_cache = {}
+        try:
+            if not self._teacher_cache:
+                await self._load_teachers()
+            tasks = []
+            for teacher_id in self._teacher_cache.keys():
+                tasks.append(self._get_teacher_groups(teacher_id))
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            unique_groups = {}
+            for result in results:
+                if not isinstance(result, Exception):
+                    for group in result:
+                        if group['type'] == 'Group' and not group['parentIds']:
+                            gid = group['id_str']
+                            if gid not in unique_groups:
+                                unique_groups[gid] = group['name']
+            self._school_groups_cache = unique_groups
+            logger.info(f"Загружено главных групп школы: {len(self._school_groups_cache)}")
+        except Exception as e:
+            logger.error(f"Ошибка загрузки групп школы: {str(e)}")
+        finally:
+            elapsed_time = time.time() - start_time
+            logger.info(f"Загрузка групп школы завершена за {elapsed_time:.2f} секунд")
 
+    async def _get_teacher_groups(self, teacher_id: str) -> List[Dict]:
+        """
+        Вспомогательный метод для получения групп учителя.
+        """
+        try:
+            async with self.semaphore:
+                async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
+                    groups = await dn.get(f"persons/{teacher_id}/schools/{self.school_id}/edu-groups/teacher")
+                    return groups
+        except Exception as e:
+            logger.error(f"Ошибка получения групп для учителя {teacher_id}: {str(e)}")
+            return []
+
+    # Добавьте после _load_school_groups
+    async def _load_school_students(self):
+        """
+        Загружает и кэширует список учеников всей школы.
+        **Назначение**:
+        Использует кэш групп школы и загружает учеников из каждой главной группы.
+        **Алгоритм работы**:
+        1. Загружает группы школы, если кэш пуст.
+        2. Для каждой группы запрашивает учеников через get_groups_pupils.
+        3. Сохраняет ID и имена в _school_students_cache.
+        4. Логирует успех или ошибки.
+        **Возвращаемые значения**:
+        - None: Заполняет кэш.
+        """
+        start_time = time.time()
+        self._school_students_cache = {}
+        try:
+            if not self._school_groups_cache:
+                await self._load_school_groups()
+            tasks = []
+            for grp_id, gname in self._school_groups_cache.items():
+                tasks.append(self._load_students_from_group_school(grp_id, gname))
+            await asyncio.gather(*tasks, return_exceptions=True)
+            logger.info(f"Загружено учеников школы: {len(self._school_students_cache)}")
+        except Exception as e:
+            logger.error(f"Ошибка загрузки учеников школы: {str(e)}")
+            self._school_students_cache = {}
+        finally:
+            elapsed_time = time.time() - start_time
+            logger.info(f"Загрузка учеников школы завершена за {elapsed_time:.2f} секунд")
+    async def _load_students_from_group_school(self, grp_id: str, group_name: str):
+        try:
+            async with self.semaphore:
+                async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
+                    students = await dn.get_groups_pupils(grp_id)
+                    for student in students:
+                        student_id = str(student.get('id'))
+                        student_name = student.get('shortName', 'Неизвестный')
+                        if student_id and student_name:
+                            self._school_students_cache[student_id] = {
+                                'name': student_name,
+                                'group_id': grp_id,
+                                'group_name': group_name
+                            }
+        except Exception as e:
+            logger.error(f"Ошибка загрузки учеников из группы {grp_id}: {str(e)}")
+    # Добавьте метод для разрешения groups
+    async def _resolve_group_ids(self, groups_input: str | List[str]) -> List[str]:
+        """
+        Разрешает имена или ID групп в list of id_str.
+        Загружает _school_groups_cache если нужно.
+        """
+        if not self._school_groups_cache:
+            await self._load_school_groups()
+        name_to_id = {name.lower(): gid for gid, name in self._school_groups_cache.items()}
+        id_to_name = {gid: name for gid, name in self._school_groups_cache.items()}
+        if isinstance(groups_input, str):
+            groups = [g.strip() for g in groups_input.split(',') if g.strip()]
+        else:
+            groups = groups_input
+        group_ids = []
+        for g in groups:
+            if g.isdigit():
+                if g in id_to_name:
+                    group_ids.append(g)
+                else:
+                    logger.warning(f"Группа ID {g} не найдена")
+            else:
+                g_lower = g.lower()
+                if g_lower in name_to_id:
+                    group_ids.append(name_to_id[g_lower])
+                else:
+                    logger.warning(f"Группа name {g} не найдена")
+        return list(set(group_ids))  # unique
+
+    # Добавьте метод для загрузки учеников из конкретных групп
+    async def _get_students_from_groups(self, group_ids: List[str]) -> Dict[str, Dict]:
+        """
+        Загружает учеников из указанных групп, возвращает dict.
+        Если группа - своя, использует cache.
+        """
+        students = {}
+        tasks = []
+        for gid in group_ids:
+            if gid == self.group_id:
+                if not self._student_cache:
+                    await self._load_students()
+                students.update(self._student_cache)
+            else:
+                gname = self._school_groups_cache.get(gid, 'Unknown')
+                tasks.append(self._load_students_from_group_temp(gid, gname))
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if not isinstance(result, Exception):
+                students.update(result)
+        return students
+
+    async def _load_students_from_group_temp(self, grp_id: str, group_name: str) -> Dict[str, Dict]:
+        """
+        Вспомогательный: загружает учеников из группы, возвращает dict.
+        """
+        group_students = {}
+        try:
+            async with self.semaphore:
+                async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
+                    students_list = await dn.get_groups_pupils(grp_id)
+                    for student in students_list:
+                        student_id = str(student.get('id'))
+                        student_name = student.get('shortName', 'Неизвестный')
+                        if student_id and student_name:
+                            group_students[student_id] = {
+                                'name': student_name,
+                                'group_id': grp_id,
+                                'group_name': group_name
+                            }
+        except Exception as e:
+            logger.error(f"Ошибка загрузки учеников из группы {grp_id}: {str(e)}")
+        return group_students
     async def _read_prompts(self) -> Dict[str, str]:
         """
         Читает промпты для AI-анализа из prompts.json.
@@ -378,20 +554,18 @@ class DnevnikFormatter:
     async def _load_students(self):
         """
         Загружает и кэширует список учеников группы.
-
         **Назначение**:
-        Получает данные об учениках и сохраняет в кэш.
-
+        Получает данные об учениках и сохраняет в кэш с group info.
         **Алгоритм работы**:
         1. Запрашивает учеников через get_groups_pupils.
-        2. Сохраняет ID и имена в _student_cache.
+        2. Сохраняет ID, имена, group_id, group_name в _student_cache.
         3. Логирует успех или ошибки.
-
         **Возвращаемые значения**:
         - None: Заполняет кэш.
         """
         start_time = time.time()
         try:
+            group_name = self.context.get('eduGroups', [{}])[0].get('name', 'Unknown')
             async with self.semaphore:
                 async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
                     students = await dn.get_groups_pupils(self.group_id)
@@ -399,7 +573,11 @@ class DnevnikFormatter:
                         student_id = str(student.get('id'))
                         student_name = student.get('shortName', 'Неизвестный')
                         if student_id and student_name:
-                            self._student_cache[student_id] = student_name
+                            self._student_cache[student_id] = {
+                                'name': student_name,
+                                'group_id': self.group_id,
+                                'group_name': group_name
+                            }
                     logger.info(f"Загружено учеников: {len(self._student_cache)}")
         except Exception as e:
             logger.error(f"Ошибка загрузки учеников: {str(e)}")
@@ -452,6 +630,67 @@ class DnevnikFormatter:
             elapsed_time = time.time() - start_time
             logger.info(f"Загрузка учителей завершена за {elapsed_time:.2f} секунд")
 
+
+
+    async def _load_parallel_students(self):
+        """
+        Загружает и кэширует список учеников всей параллели.
+        **Назначение**:
+        Получает данные об учениках из всех главных групп параллели и сохраняет в кэш.
+        **Алгоритм работы**:
+        1. Запрашивает группы параллели через /edu-groups/{group_id}/parallel.
+        2. Извлекает ID главных групп (type='Group', parentIds=[]).
+        3. Для каждой группы запрашивает учеников через get_groups_pupils.
+        4. Сохраняет ID и имена в _parallel_students_cache.
+        5. Логирует успех или ошибки.
+        **Возвращаемые значения**:
+        - None: Заполняет кэш.
+        """
+        start_time = time.time()
+        self._parallel_students_cache = {}
+        try:
+            async with self.semaphore:
+                async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
+                    parallel_groups = await dn.get(f"edu-groups/{self.group_id}/parallel")
+                    main_groups = [g['id_str'] for g in parallel_groups if g['type'] == 'Group' and not g['parentIds']]
+                    logger.info(f"Главные группы параллели: {main_groups}")
+            tasks = []
+            for grp_id in main_groups:
+                gname = [g['name'] for g in parallel_groups if g['id_str'] == grp_id][0]
+                tasks.append(self._load_students_from_group_parallel(grp_id, gname))
+            await asyncio.gather(*tasks, return_exceptions=True)
+            logger.info(f"Загружено учеников параллели: {len(self._parallel_students_cache)}")
+        except Exception as e:
+            logger.error(f"Ошибка загрузки учеников параллели: {str(e)}")
+            self._parallel_students_cache = {}
+        finally:
+            elapsed_time = time.time() - start_time
+            logger.info(f"Загрузка учеников параллели завершена за {elapsed_time:.2f} секунд")
+
+    async def _load_students_from_group_parallel(self, grp_id: str, group_name: str):
+        """
+        Вспомогательный метод для загрузки учеников из конкретной группы для parallel.
+        """
+        try:
+            async with self.semaphore:
+                async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
+                    students = await dn.get_groups_pupils(grp_id)
+                    for student in students:
+                        student_id = str(student.get('id'))
+                        student_name = student.get('shortName', 'Неизвестный')
+                        if student_id and student_name:
+                            self._parallel_students_cache[student_id] = {
+                                'name': student_name,
+                                'group_id': grp_id,
+                                'group_name': group_name
+                            }
+        except Exception as e:
+            logger.error(f"Ошибка загрузки учеников из группы {grp_id}: {str(e)}")
+
+
+
+
+
     async def _get_lesson_info(self, lesson_id: str, force_refresh: bool = False) -> Optional[Dict]:
         """
         Получает информацию об уроке по ID.
@@ -493,56 +732,49 @@ class DnevnikFormatter:
     async def _get_work_marks_by_id(self, work_id: int) -> List[Dict[str, str]]:
         """
         Получает список учеников и их оценок для указанной работы асинхронно.
-        
-        Args:
-            work_id (int): ID работы.
-            
-        Returns:
-            List[Dict[str, str]]: Список словарей с полями:
-                - name (str): Краткое имя ученика.
-                - mark (str): Оценка.
-                
-        Raises:
-            ValueError: Если work_id некорректен.
-            Exception: При сетевых ошибках (логируется).
         """
         result = []
-        try:
-            # Проверяем наличие учеников в кэше
-            if not self._student_cache:
-                logger.info("Student cache is empty, cannot fetch work marks")
-                return result
+        
+        if not self._student_cache:
+            logger.info("Student cache is empty, cannot fetch work marks")
+            return result
 
-            logger.info(f"Запрос оценок для work_id={work_id}, учеников в кэше: {len(self._student_cache)}")
-            async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
-                for student_id, student_name in self._student_cache.items():
-                    try:
-                        # Пытаемся получить оценки, учитывая возможную корутину
-                        marks_response = await dn.get_person_work_marks(person_id=student_id, work_id=work_id)
-                        marks_response = await marks_response
+        logger.info(f"Запрос оценок для work_id={work_id}, учеников в кэше: {len(self._student_cache)}")
 
+        async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
+            for student_id, student_name in self._student_cache.items():
+                try:
+                    # Только ОДИН await! Убираем вторую строку
+                    time.sleep(0.1)
 
-                        # Обрабатываем каждую оценку
+                    marks_response = await dn.get_person_work_marks(person_id=student_id, work_id=work_id)
+                    marks_response = await marks_response
+                    # Защита от пустого ответа
+                    if not marks_response:
+                        continue
+
+                    # marks_response должен быть списком словарей
+                    if isinstance(marks_response, list):
                         for mark in marks_response:
-                            mark_value = mark.get("value", "")
+                            mark_value = mark.get("value") or mark.get("mark", "")
                             if mark_value:
                                 result.append({
                                     "name": student_name,
-                                    "mark": mark_value
+                                    "mark": str(mark_value)
                                 })
-                    except Exception as e:
-                        logger.info(f"Ошибка при запросе оценок для person_id={student_id}: {e}")
-                        continue
+
+                except IndexError:
+                    # Специально ловим эту ошибку — она возникает, когда оценки нет
+                    logger.debug(f"Нет оценки для person_id={student_id} (пустой список в ответе API)")
+                    continue
+                except Exception as e:
+                    logger.info(f"Ошибка при запросе оценок для person_id={student_id}: {e}")
+                    continue
+
+        logger.info(f"Fetched marks for work_id={work_id}: {len(result)} records")
+        return result
             
-            logger.info(f"Fetched marks for work_id={work_id}: {len(result)} records")
-            return result
-            
-        except ValueError as e:
-            logger.info(f"Invalid work_id={work_id}: {e}")
-            raise
-        except Exception as e:
-            logger.info(f"Error fetching marks for work_id={work_id}: {e}")
-            return result
+
 
     async def _get_formatted_schedule_day(self, date: datetime) -> List[Dict[str, any]]:
         """
@@ -764,8 +996,8 @@ class DnevnikFormatter:
                 subject_id = None
             async with self.semaphore:
                 async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
-                    end_date = datetime.now()
-                    start_date = end_date - timedelta(days=90)
+                    start_date, end_date = await self.get_current_period_dates()          # ← самый надёжный
+
                     marks = await dn.get_person_marks(self.person_id, self.school_id, start_date, end_date)
                     logger.info(f"Получено оценок: {len(marks)}")
             def parse_mark_date(date_str):
@@ -1057,6 +1289,46 @@ class DnevnikFormatter:
             elapsed_time = time.time() - start_time
             logger.info(f"Получение ID периода завершено за {elapsed_time:.2f} секунд")
 
+    async def get_current_period_dates(self) -> Tuple[datetime, datetime]:
+        """
+        Возвращает даты текущего активного учебного периода (четверть/семестр и т.д.)
+        на основе реальных данных из API.
+        """
+        try:
+            async with self.semaphore:
+                async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
+                    periods = await dn.get(f"edu-groups/{self.group_id}/reporting-periods")
+
+            current_date = datetime.now()
+
+            for period in periods:
+                start_str = period.get('start')
+                finish_str = period.get('finish')
+                if not start_str or not finish_str:
+                    continue
+
+                try:
+                    start_date = datetime.strptime(start_str.split('.')[0], '%Y-%m-%dT%H:%M:%S')  # обрезаем миллисекунды если есть
+                    end_date = datetime.strptime(finish_str.split('.')[0], '%Y-%m-%dT%H:%M:%S')
+                except ValueError:
+                    continue
+
+                if start_date <= current_date <= end_date:
+                    logger.info(f"Найден текущий период: {period.get('name', 'Unknown')} "
+                                f"({start_date.date()} — {end_date.date()})")
+                    return start_date, end_date
+
+            # Если сегодня каникулы — ищем ближайший будущий или прошлый
+            logger.info("Сегодня каникулы или нет активного периода. Ищем ближайший.")
+            # Можно добавить логику ближайшего, но обычно достаточно fallback
+        except Exception as e:
+            logger.error(f"Ошибка при получении текущего периода: {e}")
+
+
+        return start_date, end_date
+
+
+
     async def get_formatted_final_marks(self, quarter: int, study_year: Optional[int] = None) -> List[Dict[str, any]]:
         """
         Получает итоговые оценки за четверть.
@@ -1136,58 +1408,7 @@ class DnevnikFormatter:
             elapsed_time = time.time() - start_time
             logger.info(f"Получение итоговых оценок завершено за {elapsed_time:.2f} секунд")
 
-    async def get_class_ranking(self, quarter: int, study_year: Optional[int] = None) -> List[Dict]:
-        """
-        Формирует рейтинг класса по средним оценкам.
 
-        **Назначение**:
-        Вычисляет средний балл учеников за четверть и сортирует по убыванию.
-
-        **Параметры**:
-        - quarter (int): Номер четверти (1–4).
-        - study_year (Optional[int]): Учебный год.
-
-        **Алгоритм работы**:
-        1. Проверяет корректность quarter.
-        2. Получает ID и даты периода.
-        3. Для каждого ученика вычисляет средний балл.
-        4. Сортирует по среднему баллу.
-
-        **Возвращаемые значения**:
-        - List[Dict]: Рейтинг учеников с именами, средними баллами и количеством оценок.
-        """
-        start_time = time.time()
-        if quarter not in [1, 2, 3, 4]:
-            raise ValueError("Номер четверти должен быть от 1 до 4")
-        period_data = await self._get_quarter_period_id(quarter, study_year)
-        if not period_data:
-            return []
-        period_id, start_date, finish_date, period_name = period_data
-        ranking = []
-        async def fetch_grades(student_id, student_name):
-            async with self.semaphore:
-                student_grades = []
-                for subject_id in self._subject_cache:
-                    try:
-                        async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
-                            marks = await dn.get_person_subject_marks(student_id, int(subject_id), start_date, finish_date)
-                            grades = [float(mark['value']) for mark in marks if mark.get('value', '').replace('.', '', 1).isdigit()]
-                            student_grades.extend(grades)
-                    except Exception as e:
-                        logger.error(f"Ошибка получения оценок для ученика {student_id}, предмет {subject_id}: {str(e)}")
-                avg_grade = statistics.mean(student_grades) if student_grades else 0
-                return {
-                    'name': student_name,
-                    'avg_grade': round(avg_grade, 2),
-                    'marks_count': len(student_grades)
-                }
-        tasks = [fetch_grades(student_id, student_name) for student_id, student_name in self._student_cache.items()]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        ranking = [res for res in results if not isinstance(res, Exception)]
-        ranking.sort(key=lambda x: x['avg_grade'], reverse=True)
-        elapsed_time = time.time() - start_time
-        logger.info(f"Формирование рейтинга класса завершено за {elapsed_time:.2f} секунд")
-        return ranking
 
     async def get_subject_stats(self, quarter: int, subject_id: int, study_year: Optional[int] = None) -> Dict[str, int]:
         """
@@ -1236,26 +1457,29 @@ class DnevnikFormatter:
             elapsed_time = time.time() - start_time
             logger.info(f"Получение статистики завершено за {elapsed_time:.2f} секунд")
 
-    async def get_subject_ranking(self, quarter: int, subject_id: int, study_year: Optional[int] = None) -> List[Dict]:
+# Удалите старый get_subject_ranking
+
+# Добавьте новую единственную функцию для subject ranking
+    async def get_subject_ranking(self, groups: str | List[str], subject_id: int, quarter: int, study_year: Optional[int] = None) -> List[Dict]:
         """
-        Формирует рейтинг учеников по предмету за четверть.
-
+        Формирует рейтинг по предмету для указанных групп, параллели или школы.
         **Назначение**:
-        Вычисляет средний балл учеников по предмету и сортирует.
-
+        Вычисляет средний балл учеников по предмету за четверть и сортирует по убыванию.
+        Пропускает учеников/классы без оценок по предмету.
         **Параметры**:
-        - quarter (int): Номер четверти (1–4).
+        - groups (str | List[str]): "all" для школы, "parallel" для параллели, имя/ID группы, или список имен/IDs разделенных запятой если str.
         - subject_id (int): ID предмета.
+        - quarter (int): Номер четверти (1–4).
         - study_year (Optional[int]): Учебный год.
-
         **Алгоритм работы**:
-        1. Проверяет корректность quarter и subject_id.
+        1. Проверяет корректность quarter.
         2. Получает ID и даты периода.
-        3. Загружает учеников, если кэш пуст.
-        4. Вычисляет средние баллы и сортирует.
-
+        3. Определяет учеников в зависимости от groups.
+        4. Для каждого ученика вычисляет средний балл по предмету.
+        5. Пропускает без оценок.
+        6. Сортирует по среднему баллу.
         **Возвращаемые значения**:
-        - List[Dict]: Рейтинг учеников по предмету.
+        - List[Dict]: Рейтинг учеников с именами, средними баллами, количеством оценок и group.
         """
         start_time = time.time()
         if quarter not in [1, 2, 3, 4]:
@@ -1263,32 +1487,46 @@ class DnevnikFormatter:
         period_data = await self._get_quarter_period_id(quarter, study_year)
         if not period_data:
             return []
-        period_id, start_date, finish_date, period_name= period_data
-        if str(subject_id) not in self._subject_cache:
-            logger.error(f"Предмет {subject_id} отсутствует")
-            return []
-        if not self._student_cache:
-            await self._load_students()
-            if not self._student_cache:
-                logger.error("Не удалось загрузить учеников")
+        period_id, start_date, finish_date = period_data[:3]
+        students = {}
+        if isinstance(groups, str) and groups.lower() == "all":
+            if not self._school_students_cache:
+                await self._load_school_students()
+            students = self._school_students_cache
+        elif isinstance(groups, str) and groups.lower() == "parallel":
+            if not self._parallel_students_cache:
+                await self._load_parallel_students()
+            students = self._parallel_students_cache
+        else:
+            group_ids = await self._resolve_group_ids(groups)
+            if not group_ids:
+                logger.warning("Нет валидных групп")
                 return []
+            students = await self._get_students_from_groups(group_ids)
+        if not students:
+            return []
         ranking = []
-        async def fetch_grades(student_id, student_name):
+        async def fetch_grades(student_id, info):
             async with self.semaphore:
+                student_grades = []
                 try:
                     async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
                         marks = await dn.get_person_subject_marks(student_id, subject_id, start_date, finish_date)
                         grades = [float(mark['value']) for mark in marks if mark.get('value', '').replace('.', '', 1).isdigit()]
-                        avg_grade = statistics.mean(grades) if grades else 0
-                        return {
-                            'name': student_name,
-                            'avg_grade': round(avg_grade, 2),
-                            'marks_count': len(grades)
-                        }
+                        student_grades.extend(grades)
                 except Exception as e:
-                    logger.error(f"Ошибка получения оценок для ученика {student_id}: {str(e)}")
+                    logger.error(f"Ошибка получения оценок для ученика {student_id}, предмет {subject_id}: {str(e)}")
                     return None
-        tasks = [fetch_grades(student_id, student_name) for student_id, student_name in self._student_cache.items()]
+                if not student_grades:
+                    return None
+                avg_grade = statistics.mean(student_grades)
+                return {
+                    'name': info['name'],
+                    'avg_grade': round(avg_grade, 2),
+                    'marks_count': len(student_grades),
+                    'group': info['group_name']
+                }
+        tasks = [fetch_grades(sid, info) for sid, info in students.items()]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         ranking = [res for res in results if not isinstance(res, Exception) and res]
         ranking.sort(key=lambda x: x['avg_grade'], reverse=True)
@@ -1401,63 +1639,74 @@ class DnevnikFormatter:
             elapsed_time = time.time() - start_time
             logger.info(f"Анализ данных '{analysis_type}' завершен за {elapsed_time:.2f} секунд")
 
-"""def load_students_from_files(files: list[str]) -> Dict[int, str]:
-
-    students = {}
-
-    for file_path in files:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-
-        for student in data:
-            student_id = int(student["userId_str"])
-            student_name = student["shortName"]
-
-            # если вдруг одинаковые имена — ID всё равно уникален
-            students[student_id] = student_name
-
-    return students
 
 
 
-student_files = [
-    r"F:\dn_stat_bot\8Б.json",
-    r"F:\dn_stat_bot\8В.json",
-    r"F:\dn_stat_bot\8Г.json",
-    r"F:\dn_stat_bot\8Д.json",
-    r"F:\dn_stat_bot\8A.json",
-]
-
-def print_ranking(ranking: list[dict], top: int | None = None):
-
-    if not ranking:
-        print("Рейтинг пуст")
-        return
-
-    if top:
-        ranking = ranking[:top]
-
-    print("=" * 78)
-    print(f"{'№':>3} | {'Ученик':<25} | {'Средний балл':^13} | {'Оценок':^8}")
-    print("=" * 78)
-
-    for i, student in enumerate(ranking, start=1):
-        print(
-            f"{i:>3} | "
-            f"{student['name']:<25} | "
-            f"{student['avg_grade']:^13.2f} | "
-            f"{student['marks_count']:^8}"
-        )
-
-    print("=" * 78)
-    print(f"Всего учеников: {len(ranking)}")
-
-async def main():
-    formatter = DnevnikFormatter(token="bPcU8JTfAGkyVUotT0sdaj5w1gP6E3Fc")
-    await formatter.initialize()
-    formatter._student_cache = load_students_from_files(student_files)
-    print("load_students_from_files")
-    schedule = await formatter.get_class_ranking(2)
-    print_ranking(schedule)
-    
-asyncio.run(main())"""
+    async def get_ranking(self, groups: str | List[str], quarter: int, study_year: Optional[int] = None) -> List[Dict]:
+        """
+        Формирует рейтинг по средним оценкам для указанных групп, параллели или школы.
+        **Назначение**:
+        Вычисляет средний балл учеников за четверть и сортирует по убыванию.
+        **Параметры**:
+        - groups (str | List[str]): "all" для школы, "parallel" для параллели, имя/ID группы, или список имен/IDs разделенных запятой если str.
+        - quarter (int): Номер четверти (1–4).
+        - study_year (Optional[int]): Учебный год.
+        **Алгоритм работы**:
+        1. Проверяет корректность quarter.
+        2. Получает ID и даты периода.
+        3. Определяет учеников в зависимости от groups.
+        4. Для каждого ученика вычисляет средний балл.
+        5. Сортирует по среднему баллу.
+        **Возвращаемые значения**:
+        - List[Dict]: Рейтинг учеников с именами, средними баллами, количеством оценок и group.
+        """
+        start_time = time.time()
+        if quarter not in [1, 2, 3, 4]:
+            raise ValueError("Номер четверти должен быть от 1 до 4")
+        period_data = await self._get_quarter_period_id(quarter, study_year)
+        if not period_data:
+            return []
+        period_id, start_date, finish_date = period_data[:3]
+        students = {}
+        if isinstance(groups, str) and groups.lower() == "all":
+            if not self._school_students_cache:
+                await self._load_school_students()
+            students = self._school_students_cache
+        elif isinstance(groups, str) and groups.lower() == "parallel":
+            if not self._parallel_students_cache:
+                await self._load_parallel_students()
+            students = self._parallel_students_cache
+        else:
+            group_ids = await self._resolve_group_ids(groups)
+            if not group_ids:
+                logger.warning("Нет валидных групп")
+                return []
+            students = await self._get_students_from_groups(group_ids)
+        if not students:
+            return []
+        ranking = []
+        async def fetch_grades(student_id, info):
+            async with self.semaphore:
+                student_grades = []
+                for subject_id in self._subject_cache:
+                    try:
+                        async with dnevnik.AsyncDiaryAPI(token=self.token) as dn:
+                            marks = await dn.get_person_subject_marks(student_id, int(subject_id), start_date, finish_date)
+                            grades = [float(mark['value']) for mark in marks if mark.get('value', '').replace('.', '', 1).isdigit()]
+                            student_grades.extend(grades)
+                    except Exception as e:
+                        logger.error(f"Ошибка получения оценок для ученика {student_id}, предмет {subject_id}: {str(e)}")
+                avg_grade = statistics.mean(student_grades) if student_grades else 0
+                return {
+                    'name': info['name'],
+                    'avg_grade': round(avg_grade, 2),
+                    'marks_count': len(student_grades),
+                    'group': info['group_name']
+                }
+        tasks = [fetch_grades(sid, info) for sid, info in students.items()]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        ranking = [res for res in results if not isinstance(res, Exception)]
+        ranking.sort(key=lambda x: x['avg_grade'], reverse=True)
+        elapsed_time = time.time() - start_time
+        logger.info(f"Формирование рейтинга завершено за {elapsed_time:.2f} секунд")
+        return ranking
